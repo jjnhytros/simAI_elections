@@ -84,107 +84,86 @@ def generate_candidate_oath(candidate_info, hot_topic=None):
     return oath
 
 
-def generate_random_event(candidates_info,
-                          elector_full_preferences_data,
-                          last_round_results=None):
-    """Genera evento casuale applicando Motivated Reasoning e Media Literacy."""
+def generate_random_event(candidates_info, elector_full_preferences_data, last_round_results=None):
+    """
+    Genera evento casuale applicando Motivated Reasoning e Media Literacy.
+    Include ora Dibattiti e Rally.
+    """
 
-    def apply_event_impact(elector_id, candidate_name_event,
-                           base_impact_value):
+    # La funzione interna apply_event_impact rimane invariata
+    def apply_event_impact(elector_id, candidate_name_event, base_impact_value):
         e_data_event = elector_full_preferences_data.get(elector_id)
-        if not e_data_event or candidate_name_event not in e_data_event.get(
-                'leanings', {}):
+        if not e_data_event or candidate_name_event not in e_data_event.get('leanings', {}):
             return
 
         impact_event = base_impact_value
         traits_event = e_data_event.get('traits', [])
 
-        # Motivated Reasoning
         if "Motivated Reasoner" in traits_event:
             lean_event = e_data_event['leanings'][candidate_name_event]
             mid_point = config.MAX_ELECTOR_LEANING_BASE / 2.0
             is_liked_event = lean_event > mid_point
             is_positive_event = base_impact_value > 0
             is_negative_event = base_impact_value < 0
-
             is_incongruent_event = (is_negative_event and is_liked_event) or \
-                                   (is_positive_event and not is_liked_event)
+                (is_positive_event and not is_liked_event)
             if is_incongruent_event:
                 impact_event *= (1.0 - config.MOTIVATED_REASONING_FACTOR)
 
-        # Media Literacy
-        lit_score_event = e_data_event.get('media_literacy',
-                                           config.MEDIA_LITERACY_RANGE[0])
+        lit_score_event = e_data_event.get(
+            'media_literacy', config.MEDIA_LITERACY_RANGE[0])
         min_lit, max_lit = config.MEDIA_LITERACY_RANGE
-        norm_lit_event = (lit_score_event - min_lit) / (max_lit - min_lit) if (
-            max_lit - min_lit) > 0 else 0
+        norm_lit_event = (lit_score_event - min_lit) / \
+            (max_lit - min_lit) if (max_lit - min_lit) > 0 else 0
         lit_reduction_event = norm_lit_event * config.MEDIA_LITERACY_EFFECT_FACTOR
         final_impact_event = impact_event * (1.0 - lit_reduction_event)
 
+        # Applica impatto con clamp minimo
         e_data_event['leanings'][candidate_name_event] = max(
             0.1, e_data_event['leanings'][candidate_name_event] +
-            final_impact_event)
+            final_impact_event
+        )
+        # Optional: Clamp massimo se necessario, es: min(config.MAX_ELECTOR_LEANING_BASE * 1.5, ...)
 
-    # Hot Topic & Event Selection
-    if random.random() < 0.15:  # Chance to change hot topic
+    # Aggiornamento Hot Topic (come prima)
+    if random.random() < 0.15:
         config.CURRENT_HOT_TOPIC = random.choice([
-            "administrative_experience", "social_vision", "mediation_ability",
-            "ethical_integrity"
+            "administrative_experience", "social_vision", "mediation_ability", "ethical_integrity"
         ])
-    elif random.random() < 0.05:  # Chance to clear hot topic
+    elif random.random() < 0.05:
         config.CURRENT_HOT_TOPIC = None
 
+    # Calcolo differenza integrità (come prima)
     integrity_values = [
-        c_info['attributes'].get('ethical_integrity',
-                                 config.ATTRIBUTE_RANGE[0])
+        c_info['attributes'].get(
+            'ethical_integrity', config.ATTRIBUTE_RANGE[0])
         for c_info in candidates_info if 'attributes' in c_info
     ]
     max_integrity_difference = 0
-    if integrity_values:  # Ensure list is not empty
-        max_integrity_difference = max(integrity_values) - min(
-            integrity_values) if len(integrity_values) > 1 else 0
+    if integrity_values:
+        max_integrity_difference = max(
+            integrity_values) - min(integrity_values) if len(integrity_values) > 1 else 0
 
+    # --- Definizione Tipi di Evento (con aggiunta Dibattito e Rally) ---
     event_type_definitions = {
-        "scandal": {
-            "base_prob":
-            0.10,
-            "state_factor":
-            max_integrity_difference *
-            config.EVENT_SCANDAL_PROB_FACTOR_INTEGRITY_DIFF
-        },
-        "policy_focus": {
-            "base_prob": 0.15,
-            "state_factor": 0
-        },  # Focus on current hot topic or random attribute
-        "public_opinion_shift": {
-            "base_prob": 0.10,
-            "state_factor": 0
-        },  # Shift towards/against an attribute
-        "candidate_gaffe": {
-            "base_prob": 0.12,
-            "state_factor": 0
-        },  # Random candidate makes a mistake
-        "candidate_success": {
-            "base_prob": 0.12,
-            "state_factor": 0
-        },  # Random candidate has a success moment
-        "ethics_debate": {
-            "base_prob":
-            0.08,
-            "state_factor":
-            max_integrity_difference *
-            config.EVENT_ETHICS_DEBATE_PROB_FACTOR_INTEGRITY_DIFF
-        },
-        "endorsement": {
-            "base_prob": config.EVENT_ENDORSEMENT_BASE_PROB,
-            "state_factor": 0
-        }  # Random candidate gets an endorsement
+        "scandal": {"base_prob": 0.10, "state_factor": max_integrity_difference * config.EVENT_SCANDAL_PROB_FACTOR_INTEGRITY_DIFF},
+        "policy_focus": {"base_prob": 0.15, "state_factor": 0},
+        "public_opinion_shift": {"base_prob": 0.10, "state_factor": 0},
+        "candidate_gaffe": {"base_prob": 0.12, "state_factor": 0},
+        "candidate_success": {"base_prob": 0.12, "state_factor": 0},
+        "ethics_debate": {"base_prob": 0.08, "state_factor": max_integrity_difference * config.EVENT_ETHICS_DEBATE_PROB_FACTOR_INTEGRITY_DIFF},
+        "endorsement": {"base_prob": config.EVENT_ENDORSEMENT_BASE_PROB, "state_factor": 0},
+        # Nuovi eventi
+        # Dibattito
+        "political_debate": {"base_prob": config.EVENT_DEBATE_BASE_PROB, "state_factor": 0},
+        # Rally
+        "candidate_rally": {"base_prob": config.EVENT_RALLY_BASE_PROB, "state_factor": 0}
     }
 
+    # Selezione Evento (come prima)
     event_choices = []
     event_weights = []
     for event_name, params in event_type_definitions.items():
-        # Probability influenced by base chance and current game state (e.g., integrity difference)
         effective_prob = min(
             0.5, max(0, params["base_prob"] + params.get("state_factor", 0)))
         if effective_prob > 0:
@@ -192,139 +171,226 @@ def generate_random_event(candidates_info,
             event_weights.append(effective_prob)
 
     if not event_choices or not candidates_info:
-        utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            "Nessun evento casuale generabile in questo round o nessun candidato."
-        )
+        # utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE, "Nessun evento casuale generabile in questo round o nessun candidato.") # Meno verboso
         return
 
-    chosen_event_type = random.choices(event_choices,
-                                       weights=event_weights,
-                                       k=1)[0]
-    utils.send_pygame_update(
-        utils.UPDATE_TYPE_MESSAGE,
-        f"\n--- Evento Casuale: {chosen_event_type.replace('_',' ').title()} ---"
-    )
+    chosen_event_type = random.choices(
+        event_choices, weights=event_weights, k=1)[0]
+    utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
+                             f"\n--- Evento Casuale: {chosen_event_type.replace('_',' ').title()} ---")
 
-    # Apply Event Impact
+    # --- Applicazione Impatto Evento (con aggiunta Dibattito e Rally) ---
+
     if chosen_event_type == "scandal":
-        # Higher chance for low integrity candidate, but can be random
+        # ... (logica scandalo come prima) ...
         if random.random() < 0.7 and integrity_values:
-            target_candidate = min(
-                candidates_info,
-                key=lambda c: c.get('attributes', {}).get(
-                    'ethical_integrity', config.ATTRIBUTE_RANGE[1]))
+            target_candidate = min(candidates_info, key=lambda c: c.get(
+                'attributes', {}).get('ethical_integrity', config.ATTRIBUTE_RANGE[1]))
         else:
             target_candidate = random.choice(candidates_info)
-
         scandal_target_name = target_candidate['name']
-        # Impact inversely proportional to integrity, higher for lower integrity
-        scandal_base_impact = config.EVENT_SCANDAL_IMPACT * (
-            (config.ATTRIBUTE_RANGE[1] + 1) -
-            target_candidate.get('attributes', {}).get(
-                'ethical_integrity', config.ATTRIBUTE_RANGE[0]))
+        scandal_base_impact = config.EVENT_SCANDAL_IMPACT * \
+            ((config.ATTRIBUTE_RANGE[1] + 1) - target_candidate.get(
+                'attributes', {}).get('ethical_integrity', config.ATTRIBUTE_RANGE[0]))
         utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            f"  Scandalo colpisce {scandal_target_name}!")
+            utils.UPDATE_TYPE_MESSAGE, f"  Scandalo colpisce {scandal_target_name}!")
         for elector_id_event in elector_full_preferences_data:
-            apply_event_impact(elector_id_event, scandal_target_name,
-                               -scandal_base_impact)  # Negative impact
+            apply_event_impact(
+                elector_id_event, scandal_target_name, -scandal_base_impact)
 
     elif chosen_event_type == "policy_focus":
+        # ... (logica policy focus come prima) ...
         focused_attribute = config.CURRENT_HOT_TOPIC if config.CURRENT_HOT_TOPIC else random.choice(
-            [
-                "administrative_experience", "social_vision",
-                "mediation_ability", "ethical_integrity"
-            ])
+            ["administrative_experience", "social_vision", "mediation_ability", "ethical_integrity"])
         utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            f"  Focus politico su: {focused_attribute.replace('_',' ').title()}!"
-        )
-        for elector_id_event, e_data_event_focus in elector_full_preferences_data.items(
-        ):
+            utils.UPDATE_TYPE_MESSAGE, f"  Focus politico su: {focused_attribute.replace('_',' ').title()}!")
+        for elector_id_event, e_data_event_focus in elector_full_preferences_data.items():
             elector_ideal_preference = e_data_event_focus.get(
-                f'preference_{focused_attribute}',
-                config.ELECTOR_IDEAL_PREFERENCE_RANGE[0])
+                f'preference_{focused_attribute}', config.ELECTOR_IDEAL_PREFERENCE_RANGE[0])
             for cand_info_event in candidates_info:
                 cand_attr_value = cand_info_event.get('attributes', {}).get(
                     focused_attribute, config.ATTRIBUTE_RANGE[0])
-                distance_focus = abs(cand_attr_value -
-                                     elector_ideal_preference)
-                max_possible_dist = config.ELECTOR_IDEAL_PREFERENCE_RANGE[
-                    1] - config.ELECTOR_IDEAL_PREFERENCE_RANGE[0]
+                distance_focus = abs(
+                    cand_attr_value - elector_ideal_preference)
+                max_possible_dist = config.ELECTOR_IDEAL_PREFERENCE_RANGE[1] - \
+                    config.ELECTOR_IDEAL_PREFERENCE_RANGE[0]
                 if max_possible_dist == 0:
-                    max_possible_dist = 1  # Avoid division by zero
-
-                # Higher impact if closer to ideal (normalized_distance is low)
+                    max_possible_dist = 1
                 normalized_distance = distance_focus / max_possible_dist
                 focus_impact = random.uniform(
-                    0.5, 1.5) * (1.0 - normalized_distance * 1.2
-                                 )  # Can be slightly negative if very far
-                apply_event_impact(elector_id_event, cand_info_event['name'],
-                                   focus_impact)
+                    0.5, 1.5) * (1.0 - normalized_distance * 1.2)
+                apply_event_impact(
+                    elector_id_event, cand_info_event['name'], focus_impact)
 
     elif chosen_event_type == "candidate_gaffe":
+        # ... (logica gaffe come prima) ...
         gaffe_candidate = random.choice(candidates_info)
-        gaffe_impact_value = random.uniform(0.8, 2.0)  # Magnitude of gaffe
+        gaffe_impact_value = random.uniform(0.8, 2.0)
         utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            f"  Gaffe da parte di {gaffe_candidate['name']}!")
+            utils.UPDATE_TYPE_MESSAGE, f"  Gaffe da parte di {gaffe_candidate['name']}!")
         for elector_id_event in elector_full_preferences_data:
-            apply_event_impact(elector_id_event, gaffe_candidate['name'],
-                               -gaffe_impact_value)  # Negative impact
+            apply_event_impact(
+                elector_id_event, gaffe_candidate['name'], -gaffe_impact_value)
 
     elif chosen_event_type == "candidate_success":
+        # ... (logica successo come prima) ...
         success_candidate = random.choice(candidates_info)
         success_impact_value = random.uniform(0.8, 2.0)
         utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            f"  Momento di successo per {success_candidate['name']}!")
+            utils.UPDATE_TYPE_MESSAGE, f"  Momento di successo per {success_candidate['name']}!")
         for elector_id_event in elector_full_preferences_data:
-            apply_event_impact(elector_id_event, success_candidate['name'],
-                               success_impact_value)  # Positive impact
+            apply_event_impact(
+                elector_id_event, success_candidate['name'], success_impact_value)
 
     elif chosen_event_type == "ethics_debate":
-        utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
-                                 "  Si accende un dibattito sull'etica!")
+        # ... (logica dibattito etico come prima) ...
+        utils.send_pygame_update(
+            utils.UPDATE_TYPE_MESSAGE, "  Si accende un dibattito sull'etica!")
         for elector_id_event in elector_full_preferences_data:
             for cand_info_event in candidates_info:
                 cand_integrity_val = cand_info_event.get('attributes', {}).get(
                     'ethical_integrity', config.ATTRIBUTE_RANGE[0])
-                # Impact proportional to integrity (positive for high, negative for low)
                 norm_integrity_val = (cand_integrity_val - config.ATTRIBUTE_RANGE[0]) / \
                     (config.ATTRIBUTE_RANGE[1] - config.ATTRIBUTE_RANGE[0]) if \
                     (config.ATTRIBUTE_RANGE[1] - config.ATTRIBUTE_RANGE[0]) > 0 else 0.5
-                ethics_impact = (
-                    norm_integrity_val - 0.5
-                ) * config.EVENT_ETHICS_DEBATE_IMPACT * 2  # Scale and center around 0
-                apply_event_impact(elector_id_event, cand_info_event['name'],
-                                   ethics_impact)
+                ethics_impact = (norm_integrity_val - 0.5) * \
+                    config.EVENT_ETHICS_DEBATE_IMPACT * 2
+                apply_event_impact(
+                    elector_id_event, cand_info_event['name'], ethics_impact)
 
     elif chosen_event_type == "endorsement":
+        # ... (logica endorsement come prima) ...
         endorsed_candidate = random.choice(candidates_info)
         endorsement_impact_val = random.uniform(
             *config.EVENT_ENDORSEMENT_IMPACT_RANGE)
         utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            f"  Un importante endorsement per {endorsed_candidate['name']}!")
+            utils.UPDATE_TYPE_MESSAGE, f"  Un importante endorsement per {endorsed_candidate['name']}!")
         for elector_id_event in elector_full_preferences_data:
-            apply_event_impact(elector_id_event, endorsed_candidate['name'],
-                               endorsement_impact_val)
+            apply_event_impact(
+                elector_id_event, endorsed_candidate['name'], endorsement_impact_val)
 
-    # Fallback for any other defined but not fully implemented event type
-    else:
+    # --- NUOVA LOGICA PER DIBATTITO POLITICO ---
+    elif chosen_event_type == "political_debate":
+        if not last_round_results:  # Serve per selezionare i partecipanti
+            utils.send_pygame_update(
+                utils.UPDATE_TYPE_MESSAGE, "  Dibattito annullato (mancano risultati round precedente).")
+            return
+
+        num_participants = min(len(candidates_info),
+                               config.EVENT_DEBATE_NUM_PARTICIPANTS)
+        if num_participants < 2:
+            utils.send_pygame_update(
+                utils.UPDATE_TYPE_MESSAGE, "  Dibattito annullato (pochi candidati).")
+            return
+
+        # Seleziona partecipanti principali (es. top N per voti precedenti)
+        participants_names = [
+            name for name, votes in last_round_results.most_common(num_participants)]
+        participants_info = [
+            c for c in candidates_info if c['name'] in participants_names]
+
+        if len(participants_info) < 2:  # Controllo aggiuntivo
+            utils.send_pygame_update(
+                utils.UPDATE_TYPE_MESSAGE, "  Dibattito annullato (pochi partecipanti validi).")
+            return
+
+        utils.send_pygame_update(
+            utils.UPDATE_TYPE_MESSAGE, f"  Dibattito politico tra: {', '.join(participants_names)}")
+
+        # Simula performance (semplificato: basato su mediation_ability + random)
+        performances = {}
+        for p_info in participants_info:
+            perf_score = p_info.get('attributes', {}).get(
+                'mediation_ability', config.ATTRIBUTE_RANGE[0]) * random.uniform(0.8, 1.2)
+            # Considera hot topic? Se il candidato è forte sull'hot topic, bonus. Se debole, malus.
+            hot_topic = config.CURRENT_HOT_TOPIC
+            if hot_topic and hot_topic in p_info.get('attributes', {}):
+                ht_score = p_info['attributes'][hot_topic]
+                if ht_score >= 4:
+                    perf_score += 0.5 * random.uniform(0.5, 1.0)
+                elif ht_score <= 2:
+                    perf_score -= 0.5 * random.uniform(0.5, 1.0)
+            performances[p_info['name']] = perf_score
+
+        avg_perf = sum(performances.values()) / \
+            len(performances) if performances else 0
+
+        # Applica impatto basato sulla performance relativa
+        for elector_id_event in elector_full_preferences_data:
+            # Bonus/Malus generale piccolo per tutti i partecipanti (awareness)
+            # for p_info in participants_info:
+            #     apply_event_impact(elector_id_event, p_info['name'], 0.1 * config.EVENT_DEBATE_IMPACT_FACTOR)
+
+            # Impatto specifico basato sulla performance
+            for p_name, p_perf in performances.items():
+                relative_perf = p_perf - avg_perf  # Positivo se sopra media, negativo se sotto
+                impact = relative_perf * config.EVENT_DEBATE_IMPACT_FACTOR * \
+                    random.uniform(0.8, 1.2)
+                # Elettori "CharismaFocused" potrebbero essere più influenzati (se tratto esiste)
+                e_traits = elector_full_preferences_data.get(
+                    elector_id_event, {}).get('traits', [])
+                if "CharismaFocused" in e_traits:  # Assumendo che questo tratto sia definito in config
+                    impact *= 1.5  # Esempio di moltiplicatore
+
+                apply_event_impact(elector_id_event, p_name, impact)
+
+    # --- NUOVA LOGICA PER RALLY ---
+    elif chosen_event_type == "candidate_rally":
+        # Seleziona candidato per il rally (es. casuale pesato per budget o visibilità?)
+        # Semplice: casuale tra tutti i candidati attivi
+        rally_candidate_info = random.choice(candidates_info)
+        rally_candidate_name = rally_candidate_info['name']
+
+        utils.send_pygame_update(
+            utils.UPDATE_TYPE_MESSAGE, f"  {rally_candidate_name} tiene un rally!")
+
+        # Applica impatto differenziato
+        max_lean = config.MAX_ELECTOR_LEANING_BASE
+        favor_thresh = max_lean * config.EVENT_RALLY_FAVORABLE_THRESHOLD_FACTOR
+        oppose_thresh = max_lean * config.EVENT_RALLY_OPPOSED_THRESHOLD_FACTOR
+        rally_base_impact = config.EVENT_RALLY_IMPACT_FACTOR * \
+            random.uniform(0.7, 1.3)
+
+        for elector_id_event, e_data_rally in elector_full_preferences_data.items():
+            current_leaning = e_data_rally.get(
+                'leanings', {}).get(rally_candidate_name, 0)
+            e_traits_rally = e_data_rally.get('traits', [])
+            impact_modifier = 1.0
+
+            if "Confirmation Prone" in e_traits_rally and current_leaning > favor_thresh:
+                impact_modifier *= 1.5  # Più impatto sui già convinti
+            elif "Contrarian" in e_traits_rally and current_leaning < oppose_thresh:
+                impact_modifier *= -0.5  # Effetto negativo sui contrari
+            elif current_leaning < oppose_thresh:
+                impact_modifier *= 0.2  # Meno impatto sugli oppositori non-contrarian
+
+            final_rally_impact = rally_base_impact * impact_modifier
+            apply_event_impact(
+                elector_id_event, rally_candidate_name, final_rally_impact)
+
+        # Costo opzionale del rally (modifica candidates_info direttamente)
+        if config.EVENT_RALLY_BUDGET_COST > 0:
+            rally_candidate_info['campaign_budget'] = max(0, float(
+                rally_candidate_info.get('campaign_budget', 0)) - config.EVENT_RALLY_BUDGET_COST)
+            # Nota: Questo modifica la lista candidates_info che è usata anche altrove nel round.
+            # Se serve salvare subito nel DB, va fatto qui (ma db_manager non è importato di default qui).
+            # Meglio lasciare che il salvataggio avvenga dopo simulate_campaigning.
+            utils.send_pygame_update(
+                utils.UPDATE_TYPE_MESSAGE, f"    (Rally cost {config.EVENT_RALLY_BUDGET_COST} deducted from {rally_candidate_name})")
+
+    # Fallback per altri eventi definiti ma non gestiti esplicitamente sopra
+    elif chosen_event_type not in ["scandal", "policy_focus", "candidate_gaffe", "candidate_success", "ethics_debate", "endorsement", "political_debate", "candidate_rally"]:  # pragma: no cover
         target_cand_fallback = random.choice(candidates_info)['name']
         impact_sign_fallback = random.choice([-1, 1])
         base_impact_fallback = impact_sign_fallback * random.uniform(0.3, 1.0)
         utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            f"  Evento generico ({chosen_event_type}) per {target_cand_fallback} (impatto: {base_impact_fallback:.2f})"
-        )
+            utils.UPDATE_TYPE_MESSAGE, f"  Evento generico non implementato ({chosen_event_type}) per {target_cand_fallback} (impatto: {base_impact_fallback:.2f})")
         for elector_id_event in elector_full_preferences_data:
-            apply_event_impact(elector_id_event, target_cand_fallback,
-                               base_impact_fallback)
+            apply_event_impact(
+                elector_id_event, target_cand_fallback, base_impact_fallback)
 
-    utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE, "--------------------")
+    utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
+                             "--------------------")  # Fine sezione eventi
 
 
 def run_election_simulation(election_attempt, preselected_candidates_info_gui,

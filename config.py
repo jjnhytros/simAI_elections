@@ -284,21 +284,36 @@ SOCIAL_INFLUENCE_ITERATIONS = 1
 CURRENT_HOT_TOPIC = None
 
 # Scandal Event Parameters
-EVENT_SCANDAL_PROB_FACTOR_INTEGRITY_DIFF = random.uniform(
-    0.015, 0.035)  # Probability factor based on max integrity difference
-EVENT_SCANDAL_IMPACT = random.uniform(1.0, 3.0)  # Base impact of a scandal
+EVENT_SCANDAL_PROB_FACTOR_INTEGRITY_DIFF = random.uniform(0.015, 0.035)
+EVENT_SCANDAL_IMPACT = random.uniform(1.0, 3.0)
 
 # Ethics Debate Event Parameters
-EVENT_ETHICS_DEBATE_PROB_FACTOR_INTEGRITY_DIFF = random.uniform(
-    0.008, 0.02)  # Probability factor based on max integrity difference
-# Base impact of ethics debate on leanings
+EVENT_ETHICS_DEBATE_PROB_FACTOR_INTEGRITY_DIFF = random.uniform(0.008, 0.02)
 EVENT_ETHICS_DEBATE_IMPACT = random.uniform(0.08, 0.15)
 
 # Endorsement Event Parameters
-# Base probability for a positive endorsement event
 EVENT_ENDORSEMENT_BASE_PROB = 0.05
-# Range for the impact of an endorsement on leanings
 EVENT_ENDORSEMENT_IMPACT_RANGE = (0.1, 0.3)
+
+# --- NUOVI PARAMETRI PER DIBATTITI E RALLY ---
+# Political Debate Event Parameters
+EVENT_DEBATE_BASE_PROB = 0.08  # Probabilità base che si verifichi un dibattito
+# Fattore generale per l'impatto del dibattito sui leanings
+EVENT_DEBATE_IMPACT_FACTOR = random.uniform(0.3, 0.8)
+# Numero di candidati principali che partecipano (basato sui risultati precedenti)
+EVENT_DEBATE_NUM_PARTICIPANTS = random.randint(3, 5)
+
+# Candidate Rally Event Parameters
+EVENT_RALLY_BASE_PROB = 0.10  # Probabilità base che un candidato tenga un rally
+# Fattore generale per l'impatto del rally sui leanings
+EVENT_RALLY_IMPACT_FACTOR = random.uniform(0.4, 0.9)
+# Costo opzionale in budget per tenere un rally
+EVENT_RALLY_BUDGET_COST = random.randint(20, 60)
+# Soglia di leaning per considerare un elettore "favorevole" al candidato del rally
+EVENT_RALLY_FAVORABLE_THRESHOLD_FACTOR = 0.6  # (es. leaning > 60% del max)
+# Soglia per considerare un elettore "opposto"
+EVENT_RALLY_OPPOSED_THRESHOLD_FACTOR = 0.3  # (es. leaning < 30% del max)
+# --- FINE NUOVI PARAMETRI ---
 
 
 # ==============================================================================

@@ -35,14 +35,14 @@
     h.  [ ] Visualizzazione Reti Sociali (GUI dedicata).
 
 3.  **Miglioramenti alla Simulazione**
-    a.  [P] Simulazione Campagna Elettorale più Complessa:
+    a.  [x] Simulazione Campagna Elettorale più Complessa:
         i.  [x] Budget e temi inclusi.
         ii. [x] Legame Budget-Efficacia (Allocazione strategica budget migliorata con correzione bug, meccanica di spesa ora corretta).
-        iii.[ ] Rendimenti decrescenti / Impatto budget totale.
-        iv. [ ] Eventi Pubblici specifici (dibattiti, rally).
+        iii.[x] Rendimenti decrescenti / Impatto budget totale.
+        iv. [x] Eventi Pubblici specifici (dibattiti, rally).
     b.  [x] Influenza Tratti Elettori/Cittadini (Implementata, aggiunto "Strong Partisan").
     c.  [P] Eventi Casuali:
-        i.  [x] Logica base implementata.
+        i.  [x] Logica base implementata (ampliata con dibattiti/rally).
         ii. [P] Eventi influenzati dallo stato, `CURRENT_HOT_TOPIC`.
         iii.[x] Applicato Motivated Reasoning & Media Literacy all'impatto.
         iv. [ ] Modellare Ecosistemi Mediatici (bias sorgenti, etc. - da PDF).
@@ -58,7 +58,7 @@
     d.  [ ] IA per Ottimizzazione Allocazione Risorse (Simulare CRM - da PDF).
 
 5.  **Generazione Dinamica di Eventi/Notizie:**
-    a.  [P] Eventi Casuali Influenzati (Implementati, con bias/literacy, ulteriormente espandibili).
+    a.  [x] Eventi Casuali Influenzati (Implementati, con bias/literacy, dibattiti, rally; ulteriormente espandibili).
 
 6.  **Generazione di Contenuti Testuali (NLG):**
     a.  [x] Discorsi/Oath Più Variati (Migliorata funzione).
