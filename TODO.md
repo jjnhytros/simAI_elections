@@ -41,9 +41,9 @@
         iii.[x] Rendimenti decrescenti / Impatto budget totale.
         iv. [x] Eventi Pubblici specifici (dibattiti, rally).
     b.  [x] Influenza Tratti Elettori/Cittadini (Implementata, aggiunto "Strong Partisan").
-    c.  [P] Eventi Casuali:
+    c.  [x] Eventi Casuali:
         i.  [x] Logica base implementata (ampliata con dibattiti/rally).
-        ii. [P] Eventi influenzati dallo stato, `CURRENT_HOT_TOPIC`.
+        ii. [x] Eventi influenzati dallo stato, `CURRENT_HOT_TOPIC`.
         iii.[x] Applicato Motivated Reasoning & Media Literacy all'impatto.
         iv. [ ] Modellare Ecosistemi Mediatici (bias sorgenti, etc. - da PDF).
     d.  [P] Voto Strategico (Logica base implementata, migliorabile).
@@ -58,7 +58,7 @@
     d.  [ ] IA per Ottimizzazione Allocazione Risorse (Simulare CRM - da PDF).
 
 5.  **Generazione Dinamica di Eventi/Notizie:**
-    a.  [x] Eventi Casuali Influenzati (Implementati, con bias/literacy, dibattiti, rally; ulteriormente espandibili).
+    a.  [x] Eventi Casuali Influenzati (Implementati, con bias/literacy, dibattiti, rally, dipendenza da stato/hot topic; ulteriormente espandibili).
 
 6.  **Generazione di Contenuti Testuali (NLG):**
     a.  [x] Discorsi/Oath Più Variati (Migliorata funzione).
