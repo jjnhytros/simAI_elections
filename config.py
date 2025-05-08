@@ -1,3 +1,4 @@
+# config.py
 # In config.py
 
 import random
@@ -16,7 +17,7 @@ if _raw_grand_electors % TARGET_DIVISOR_ELECTORS != 0:
     increased_electors = (_raw_grand_electors //
                           TARGET_DIVISOR_ELECTORS + 1) * TARGET_DIVISOR_ELECTORS
     # Prova a diminuire al precedente multiplo
-    decreased_electors = (_raw_grand_electors //
+    decreased_electors = (_raw_grand_electors //  # Corrected variable name here
                           TARGET_DIVISOR_ELECTORS) * TARGET_DIVISOR_ELECTORS
 
     if decreased_electors < _min_grand_electors:
@@ -81,6 +82,9 @@ NETWORK_REWIRING_PROB = 0.1
 # Alpha: Quanto peso viene dato alla media dei vicini (0=nessuna influenza, 1=solo vicini)
 SOCIAL_INFLUENCE_STRENGTH = 0.05
 SOCIAL_INFLUENCE_ITERATIONS = 1   # Quante volte applicare l'influenza per round
+# Fattore che influenza quanto l'esposizione all'influenza sociale modifica i pesi delle preferenze (es. identity_weight)
+SOCIAL_INFLUENCE_LEARNING_EFFECT = random.uniform(0.01, 0.05)
+
 
 ### AI INTEGRATION ###
 # Grand Elector "AI" voting parameters
@@ -163,6 +167,20 @@ CAMPAIGN_ALLOCATION_SUCCESS_CHANCE_FACTOR = random.uniform(0.003, 0.008)
 MAX_CAMPAIGN_INFLUENCE_PER_ATTEMPT = random.uniform(2.0, 4.0)
 # NUOVO: Per normalizzare il potential score nell'allocazione budget
 MAX_TARGETING_POTENTIAL_SCORE = 25.0
+
+# --- Competitive Adaptation Parameters (NUOVO) ---
+# Quanto i candidati si concentrano sui propri punti di forza (0=solo attacco, 1=solo forza)
+COMPETITIVE_ADAPTATION_SELF_FOCUS_FACTOR = random.uniform(0.4, 0.7)
+# Quanto l'analisi competitiva influenza la selezione dei temi
+COMPETITIVE_ADAPTATION_IMPACT = random.uniform(0.3, 0.6)
+# Quanti avversari principali vengono considerati nell'analisi
+COMPETITIVE_ADAPTATION_TOP_OPPONENTS = 2
+
+# --- Elector Learning Parameters (NUOVO) ---
+# Tasso di apprendimento: determina la magnitudo dei cambiamenti per round
+ELECTOR_LEARNING_RATE = random.uniform(0.01, 0.05)
+# Fattore che influenza quanto l'esposizione alla campagna modifica i pesi delle preferenze (es. identity_weight)
+CAMPAIGN_EXPOSURE_LEARNING_EFFECT = random.uniform(0.02, 0.08)
 
 
 ### CITIZEN AI INTEGRATION (for District Elections) ###

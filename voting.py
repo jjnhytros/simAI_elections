@@ -1,10 +1,9 @@
+# voting.py
 import random
 import math
 from collections import Counter
-import copy  # Necessario per deepcopy
-# Necessario per tipo grafo (anche se usato in generation.py)
+import copy
 import networkx as nx
-# Imports da altri moduli del progetto (modificati da relativi a assoluti)
 import config
 import utils
 
@@ -300,9 +299,137 @@ def simulate_ai_vote(elector_id,
             return random.choice(votable_list) if votable_list else None
 
 
+def analyze_competition_and_adapt_strategy(candidate_info, all_candidates_info,
+                                           last_round_results, current_round):
+    """
+    Analyzes the competitive landscape and adapts the candidate's campaign strategy.
+    This is a basic rule-based adaptation.
+    """
+    cand_name = candidate_info['name']
+    cand_attrs = candidate_info.get("attributes", {})
+    current_themes = candidate_info.get('current_campaign_themes', [])
+
+    utils.send_pygame_update(
+        utils.UPDATE_TYPE_MESSAGE,
+        f"  {cand_name} analyzing competition (Round {current_round})...")
+
+    # 1. Gather Info: Use last round results as simulated poll data
+    if not last_round_results or sum(last_round_results.values()) == 0:
+        # If no results yet, stick to initial strategy (based on attributes)
+        utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
+                                 "    No previous results to analyze.")
+        # Ensure themes are initialized if not already
+        if not current_themes:
+            sorted_attrs = sorted(cand_attrs.items(),
+                                  key=lambda i: i[1],
+                                  reverse=True)
+            current_themes = [
+                a[0] for a in sorted_attrs[:random.randint(1, 2)]
+            ]
+            candidate_info['current_campaign_themes'] = current_themes
+        return
+
+    total_votes = sum(last_round_results.values())
+    sorted_results = last_round_results.most_common()
+
+    # Find own position and top opponents
+    own_votes = last_round_results.get(cand_name, 0)
+    own_rank = next((i + 1 for i, (name, votes) in enumerate(sorted_results)
+                     if name == cand_name),
+                    len(sorted_results) + 1)
+    top_opponents_data = [
+        (name, votes) for name, votes in
+        sorted_results[:config.COMPETITIVE_ADAPTATION_TOP_OPPONENTS + 1]
+        if name != cand_name
+    ][:config.COMPETITIVE_ADAPTATION_TOP_OPPONENTS]
+    top_opponent_names = [name for name, votes in top_opponents_data]
+
+    utils.send_pygame_update(
+        utils.UPDATE_TYPE_MESSAGE,
+        f"    Rank: {own_rank}/{len(sorted_results)}. Top opps: {top_opponent_names}"
+    )
+
+    # 2. Analyze & 3. Adapt Strategy
+    new_themes = []
+    available_attrs = list(cand_attrs.keys())
+
+    # Strategy A: Focus on strengths (influenced by self-focus factor)
+    # Pick themes where candidate has high attribute values
+    sorted_cand_attrs = sorted(cand_attrs.items(),
+                               key=lambda i: i[1],
+                               reverse=True)
+    strength_themes = [attr for attr, val in sorted_cand_attrs
+                       if val >= 4]  # Focus on high attributes
+
+    # Strategy B: Counter/Attack opponents (influenced by 1 - self-focus factor)
+    # Identify themes where opponents are strong, potentially counter them
+    opponent_strength_themes = {}
+    for opp_name in top_opponent_names:
+        opp_info = next(
+            (c for c in all_candidates_info if c['name'] == opp_name), None)
+        if opp_info and opp_info.get('attributes'):
+            for attr, val in opp_info['attributes'].items():
+                if val >= 4:  # Opponent is strong in this attribute
+                    opponent_strength_themes[
+                        attr] = opponent_strength_themes.get(attr, 0) + 1
+
+    # Sort opponent themes by how many top opponents are strong in them
+    sorted_opp_themes = sorted(opponent_strength_themes.items(),
+                               key=lambda i: i[1],
+                               reverse=True)
+    counter_themes_pool = [attr for attr, count in sorted_opp_themes]
+
+    # Combine strategies based on competitive adaptation factors
+    num_themes_to_pick = random.randint(1, 2)
+    picked_count = 0
+
+    # Prioritize self-focus themes
+    for theme in strength_themes:
+        if picked_count < num_themes_to_pick and random.random(
+        ) < config.COMPETITIVE_ADAPTATION_SELF_FOCUS_FACTOR:
+            if theme in available_attrs and theme not in new_themes:  # Check if it's a valid attribute
+                new_themes.append(theme)
+                picked_count += 1
+
+    # Fill remaining slots (if any) with counter themes
+    if picked_count < num_themes_to_pick:
+        for theme in counter_themes_pool:
+            if picked_count < num_themes_to_pick and random.random() < (
+                    1.0 - config.COMPETITIVE_ADAPTATION_SELF_FOCUS_FACTOR):
+                if theme in available_attrs and theme not in new_themes:  # Check if it's a valid attribute
+                    new_themes.append(theme)
+                    picked_count += 1
+
+    # Fallback: if strategy didn't yield enough themes, pick randomly from strengths or own high attributes
+    if picked_count < num_themes_to_pick:
+        fallback_pool = list(
+            set(strength_themes +
+                available_attrs))  # Pool of own relevant themes
+        random.shuffle(fallback_pool)
+        for theme in fallback_pool:
+            if picked_count < num_themes_to_pick:
+                if theme not in new_themes:
+                    new_themes.append(theme)
+                    picked_count += 1
+
+    # Ensure themes are valid attributes
+    final_themes = [t for t in new_themes if t in available_attrs]
+    if not final_themes:  # If no themes were picked, default to top attribute
+        if sorted_cand_attrs:
+            final_themes = [sorted_cand_attrs[0][0]
+                            ]  # Pick highest attribute as theme
+
+    candidate_info['current_campaign_themes'] = final_themes
+    utils.send_pygame_update(
+        utils.UPDATE_TYPE_MESSAGE,
+        f"    Adapted themes: {', '.join(t.replace('_',' ').title() for t in final_themes)}"
+    )
+
+
 def simulate_campaigning(candidates_info, electors,
                          elector_full_preferences_data, last_round_results):
-    """Simulates campaigning considering Media Literacy and Confirmation Bias."""
+    """Simulates campaigning considering Media Literacy and Confirmation Bias,
+       and using dynamically adapted themes."""
     utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
                              "\n--- Simulating Candidate Campaigning ---")
     if not candidates_info or not electors:
@@ -316,7 +443,8 @@ def simulate_campaigning(candidates_info, electors,
         cand_attrs = cand.get("attributes", {})
         cand_med = cand_attrs.get('mediation_ability',
                                   config.ATTRIBUTE_RANGE[0])
-        themes = cand.get('current_campaign_themes', [])
+        themes = cand.get('current_campaign_themes',
+                          [])  # Use the adapted themes
         budget = cand.get('campaign_budget', 0)
         min_cost = config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[0]
 
@@ -425,15 +553,30 @@ def simulate_campaigning(candidates_info, electors,
                         min_cost) * config.CAMPAIGN_ALLOCATION_INFLUENCE_FACTOR
                     total_inf = min(base_inf + alloc_inf_bonus,
                                     config.MAX_CAMPAIGN_INFLUENCE_PER_ATTEMPT)
+
+                    # Apply Theme Bonus (now more likely for chosen themes)
                     theme_bonus = 0.0
                     e_weights = e_prefs.get('weights', {})
                     if themes and e_weights:
                         for t in themes:
                             w = e_weights.get(t, 0)
-                        if w > config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[0]:
-                            max_w = config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[1]
-                            norm_w = w / max_w if max_w > 0 else 0.5
-                            theme_bonus += config.CAMPAIGN_THEME_BONUS_PER_ATTRIBUTE * norm_w
+                            # Higher chance of bonus if theme is in the adapted themes
+                            if w > config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[
+                                    0] and t in themes:
+                                max_w = config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[
+                                    1]
+                                norm_w = w / max_w if max_w > 0 else 0.5
+                                theme_bonus += config.CAMPAIGN_THEME_BONUS_PER_ATTRIBUTE * norm_w * random.uniform(
+                                    1.0,
+                                    1.5)  # Slightly boosted if adapted theme
+                            elif w > config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[
+                                    0]:  # Still a chance for non-adapted relevant themes
+                                max_w = config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[
+                                    1]
+                                norm_w = w / max_w if max_w > 0 else 0.5
+                                theme_bonus += config.CAMPAIGN_THEME_BONUS_PER_ATTRIBUTE * norm_w * random.uniform(
+                                    0.5, 1.0)  # Reduced if not adapted theme
+
                     total_inf += theme_bonus
                     # Confirmation Bias
                     conf_mod = 1.0
@@ -450,6 +593,18 @@ def simulate_campaigning(candidates_info, electors,
                     if cand_name in e_prefs['leanings']:
                         e_prefs['leanings'][cand_name] = max(
                             0.1, e_prefs['leanings'][cand_name] + adj_inf)
+
+                    # --- Elector Learning: Campaign Exposure (NUOVO) ---
+                    # Elettore apprende/adatta i suoi pesi di preferenza basandosi sull'esposizione alla campagna riuscita
+                    # Una campagna riuscita potrebbe rafforzare (o casualmente indebolire) l'importanza dell'identità vs policy
+                    learning_adj = config.ELECTOR_LEARNING_RATE * config.CAMPAIGN_EXPOSURE_LEARNING_EFFECT * random.uniform(
+                        -0.5, 0.5)  # Piccolo aggiustamento casuale
+                    e_prefs['identity_weight'] = max(
+                        0.1, min(0.9,
+                                 e_prefs['identity_weight'] + learning_adj))
+                    e_prefs['policy_weight'] = 1.0 - e_prefs[
+                        'identity_weight']  # Assicura che la somma sia 1.0
+
             else:
                 utils.send_pygame_update(
                     utils.UPDATE_TYPE_MESSAGE,
@@ -507,10 +662,7 @@ def simulate_social_influence(network_graph, current_preferences):
             e_leans = e_data.get('leanings', {})
             if n_count > 0:
                 avg_neigh_leans = {c: 0.0 for c in all_cands}
-                neigh_counted = {
-                    c: 0
-                    for c in all_cands
-                }
+                neigh_counted = {c: 0 for c in all_cands}
                 for n_id in neighbors:
                     n_leans = curr_iter_prefs.get(n_id, {}).get('leanings', {})
                     for c in all_cands:
@@ -524,11 +676,38 @@ def simulate_social_influence(network_graph, current_preferences):
                         avg_neigh_leans[c] = e_leans.get(c, 0)
 
                 target_leans = next_prefs[e_id].get('leanings', {})
+                original_identity_weight = e_data.get(
+                    'identity_weight',
+                    0.5)  # Get original weight for learning calculation
+
                 for c in all_cands:
                     curr_l = e_leans.get(c, 0)
                     avg_n = avg_neigh_leans[c]
-                    target_leans[c] = max(0.1,
-                                          (1 - alpha) * curr_l + alpha * avg_n)
+                    # Check if influence happened
+                    if abs(avg_n - curr_l
+                           ) > 0.01:  # Simple threshold to consider influence
+                        # Apply influence on leaning
+                        target_leans[c] = max(0.1, (1 - alpha) * curr_l +
+                                              alpha * avg_n)
+
+                        # --- Elector Learning: Social Influence Exposure (NUOVO) ---
+                        # Elettore apprende/adatta i suoi pesi di preferenza basandosi sull'esposizione all'influenza sociale
+                        # L'esposizione a opinioni simili (o diverse) potrebbe rafforzare (o casualmente indebolire) l'importanza dell'identità vs policy
+                        # Aggiustamento basato sulla magnitudo dell'influenza ricevuta e un fattore casuale
+                        influence_magnitude = abs(avg_n - curr_l)
+                        learning_adj = config.ELECTOR_LEARNING_RATE * config.SOCIAL_INFLUENCE_LEARNING_EFFECT * influence_magnitude * random.uniform(
+                            -1.0, 1.0
+                        )  # Adjustment based on influence and randomness
+
+                        # Apply learning adjustment to identity_weight
+                        next_prefs[e_id]['identity_weight'] = max(
+                            0.1,
+                            min(
+                                0.9, next_prefs[e_id]['identity_weight'] +
+                                learning_adj))
+                        next_prefs[e_id]['policy_weight'] = 1.0 - next_prefs[
+                            e_id]['identity_weight']  # Ensure sum is 1.0
+
     utils.send_pygame_update(
         utils.UPDATE_TYPE_MESSAGE,
         f"Social influence computed ({iterations} iter, strength={alpha:.2f})."

@@ -1,3 +1,4 @@
+# TODO.md
 # TODO - simAI_elections
 
 (Legenda: [x] = Completato, [P] = Parzialmente Completato, [ ] = Da Fare, [N/A] = Non Applicabile/Riconsiderato)
@@ -12,7 +13,7 @@
     * [P] Voto Basato su Identità vs. Policy (Implementato `party_id`, `identity_weight` e calcolo leaning combinato).
     * [P] Influenza Reti Sociali Esplicite (Implementato grafo Watts-Strogatz e modello influenza media pesata).
     * [P] Alfabetizzazione Mediatica (Aggiunto attributo e influenza base su campagna/eventi - da PDF).
-    * [ ] Apprendimento Agenti (Elettori del Collegio potrebbero adattare strategie).
+    * [P] Apprendimento Agenti (Gli elettori del Collegio possono adattare leggermente i pesi policy/identità in base all'esposizione a campagna e influenza sociale).
 
 2.  **Miglioramenti alla GUI**
     * [x] Visualizzazione risultati con barre.
@@ -49,7 +50,7 @@
 4.  **Strategie di Campagna Dinamiche (Candidate AI):**
     * [P] Targeting Elettori (Basato su potenziale).
     * [P] Selezione dei Temi (Base su attributi + hot topic).
-    * [ ] Adattamento alla Competizione (Analisi avversari, etc. - richiede AI avanzata - da PDF).
+    * [P] Adattamento alla Competizione (Analisi avversari, adattamento temi basato su risultati precedenti e attributi candidati - implementazione base rule-based).
     * [ ] IA per Ottimizzazione Allocazione Risorse (Simulare CRM - da PDF).
 
 5.  **Generazione Dinamica di Eventi/Notizie:**
