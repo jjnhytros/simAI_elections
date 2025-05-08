@@ -6,7 +6,7 @@ import time
 
 # Imports da altri moduli del progetto (assoluti)
 import config
-import data
+import data  # Import necessario per accedere alle liste nomi in caso di necessità future
 import utils
 import election
 
@@ -25,34 +25,29 @@ simulation_running_event = threading.Event()
 simulation_waiting_for_next = False
 
 # To store (rect, candidate_info) for clickable areas in the Visual Area
-displayed_candidate_sprites = []
+# Questo ora potrebbe non essere più necessario se non rendiamo i nomi cliccabili,
+# ma lo lasciamo per ora, memorizzerà il rect del testo.
+displayed_candidate_text_rects = []
 
 
-def render_text(font, text, color, surface, x, y):
+def render_text(font,
+                text,
+                color,
+                surface,
+                x,
+                y,
+                antialias=True):  # Aggiunto antialias
     """Renders text on a Pygame surface."""
-    text_surface = font.render(str(text), True, color)
-    surface.blit(text_surface, (x, y))
-    return text_surface.get_height()
+    text_surface = font.render(str(text), antialias, color)  # Usa antialias
+    rect = surface.blit(text_surface, (x, y))
+    # Restituisce l'altezza e il rettangolo per potenziali interazioni
+    return text_surface.get_height(), rect
 
 
 def get_sprite_from_sheet(spritesheet, row, col, sprite_width, sprite_height):
-    """Extracts a single sprite surface from a spritesheet."""
-    if spritesheet is None:
-        return None
-
-    sheet_width, sheet_height = spritesheet.get_size()
-    x = col * sprite_width
-    y = row * sprite_height
-
-    if x + sprite_width <= sheet_width and y + sprite_height <= sheet_height:
-        sprite_surface = pygame.Surface((sprite_width, sprite_height),
-                                        pygame.SRCALPHA, 32)
-        sprite_surface = sprite_surface.convert_alpha()
-        sprite_surface.blit(spritesheet, (0, 0),
-                            (x, y, sprite_width, sprite_height))
-        return sprite_surface
-    else:
-        return None
+    """DEPRECATO: Non più usata per estrarre sprite."""
+    # Questa funzione non è più necessaria e può essere rimossa o lasciata vuota.
+    return None
 
 
 def draw_button(surface, rect, color, text, font, text_color, enabled=True):
@@ -75,65 +70,50 @@ def draw_button(surface, rect, color, text, font, text_color, enabled=True):
 
 
 def main_pygame_gui():
-    global STATUS_AREA, VISUAL_AREA, RESULTS_AREA, LOG_AREA, BUTTON_AREA, simulation_waiting_for_next, displayed_candidate_sprites
+    global STATUS_AREA, VISUAL_AREA, RESULTS_AREA, LOG_AREA, BUTTON_AREA, simulation_waiting_for_next, displayed_candidate_text_rects
 
     pygame.init()
 
     infoObject = pygame.display.Info()
     SCREEN_WIDTH = infoObject.current_w
     SCREEN_HEIGHT = infoObject.current_h
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT),
-                                     pygame.FULLSCREEN)
+    screen = pygame.display.set_mode(
+        (SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN
+        | pygame.SRCALPHA)  # Aggiunto SRCALPHA per trasparenza se necessaria
 
     pygame.display.set_caption(config.WINDOW_TITLE)
 
     try:
-        font = pygame.font.SysFont("monospace", config.PIXEL_FONT_SIZE)
-        small_font = pygame.font.SysFont("monospace",
-                                         config.PIXEL_FONT_SIZE - 2)
+        # Usiamo un font più leggibile se disponibile
+        font = pygame.font.SysFont("DejaVu Sans", config.PIXEL_FONT_SIZE)
+        small_font = pygame.font.SysFont(
+            "DejaVu Sans", config.PIXEL_FONT_SIZE - 4)  # Ridotto un po' di più
+        title_font = pygame.font.SysFont("DejaVu Sans",
+                                         config.PIXEL_FONT_SIZE + 2,
+                                         bold=True)
     except pygame.error as e:
-        print(f"Warning, could not load font: {e}")
+        print(
+            f"Warning, could not load 'DejaVu Sans' font: {e}. Falling back to monospace."
+        )
         font = pygame.font.SysFont("monospace", config.PIXEL_FONT_SIZE)
         small_font = pygame.font.SysFont("monospace",
                                          config.PIXEL_FONT_SIZE - 2)
+        title_font = pygame.font.SysFont("monospace",
+                                         config.PIXEL_FONT_SIZE + 2,
+                                         bold=True)
 
     clock = pygame.time.Clock()
 
-    # --- Load Images and Extract Sprites ---
-    assets = {}
-    sprites = {}
+    # --- RIMOZIONE CARICAMENTO IMMAGINI E SPRITE ---
+    # assets = {}
+    # sprites = {}
+    # for name, path in config.IMAGE_PATHS.items(): ... (rimosso)
+    # if data.SPRITE_MAPPING: ... (rimosso)
+    # --- FINE RIMOZIONE ---
 
-    for name, path in config.IMAGE_PATHS.items():
-        if name.startswith("character_"):
-            try:
-                loaded_image = pygame.image.load(path).convert_alpha()
-                assets[name] = loaded_image
-            except pygame.error as e:
-                print(f"Warning: Could not load image {path}: {e}")
-                assets[name] = None
-
-    if data.SPRITE_MAPPING:
-        for sprite_name, (sheet_asset_key, row,
-                          col) in data.SPRITE_MAPPING.items():
-            spritesheet = assets.get(sheet_asset_key)
-
-            if spritesheet:
-                sprite_surface = get_sprite_from_sheet(spritesheet, row, col,
-                                                       config.SPRITE_WIDTH,
-                                                       config.SPRITE_HEIGHT)
-                if sprite_surface:
-                    sprites[sprite_name] = sprite_surface
-            else:
-                pass
-
-    else:
-        print(
-            "Warning: SPRITE_MAPPING is empty. No character sprites will be available."
-        )
-
-    # --- UI Layout Areas (Defined dynamically based on screen size) ---
+    # --- UI Layout Areas (come prima) ---
     STATUS_AREA = pygame.Rect(20, 20, SCREEN_WIDTH - 40, 80)
-    VISUAL_AREA_HEIGHT = 200
+    VISUAL_AREA_HEIGHT = 150  # Altezza ridotta, non servono più gli sprite alti
     VISUAL_AREA = pygame.Rect(20, STATUS_AREA.bottom + 10, SCREEN_WIDTH - 40,
                               VISUAL_AREA_HEIGHT)
     AREA_PADDING = 10
@@ -153,7 +133,7 @@ def main_pygame_gui():
                               SCREEN_WIDTH - (AREA_PADDING * 2),
                               BUTTON_AREA_HEIGHT)
 
-    # Simulation state variables for GUI display
+    # Simulation state variables for GUI display (come prima)
     current_status = {
         "attempt": 0,
         "phase": "Initializing...",
@@ -163,6 +143,7 @@ def main_pygame_gui():
     current_results_data = []
     log_messages = []
     current_status_text = ""
+    key_electors_log = []  # Lista per log elettori chiave
 
     log_line_height = small_font.get_linesize()
     if log_line_height <= 0:
@@ -178,6 +159,10 @@ def main_pygame_gui():
     running = True
     while running:
         # --- Event Handling ---
+        mouse_pos = pygame.mouse.get_pos()
+        clicked_candidate = None  # Per tooltip/info
+        tooltip_text = None
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -187,39 +172,34 @@ def main_pygame_gui():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left click
                     # Check button clicks
-
-                    # Controllo pulsante Start
-                    # Usa simulation_running_event per verificare se la simulazione è attiva
+                    # ... (logica pulsanti Start, Next Round, Quit come prima) ...
                     if 'start_button_rect' in locals(
                     ) and start_button_rect.collidepoint(event.pos):
-                        if not simulation_running_event.is_set(
-                        ):  # Check if not already running
+                        # ... (logica start)
+                        if not simulation_running_event.is_set():
                             simulation_started = True
-                            # Reset state for a new simulation
                             current_status = {
-                                "attempt": 0,
+                                "attempt": 1,
                                 "phase": "Initializing...",
                                 "round": 0,
-                                "status": "Idle",
-                            }
+                                "status": "Idle"
+                            }  # Resetta tentativo a 1
                             current_results_data = []
-                            log_messages = []
+                            log_messages = ["Simulation started..."]
+                            key_electors_log = []
                             flag_state = None
                             simulation_waiting_for_next = False
-                            displayed_candidate_sprites = [
-                            ]  # Clear clickable sprites list
-
-                            # Clear the event before starting the new thread
-                            simulation_continue_event.clear(
-                            )  # Ensure it's clear before starting
-
-                            # Start the simulation thread
+                            displayed_candidate_text_rects = []
+                            simulation_continue_event.clear()
                             simulation_thread = threading.Thread(
                                 target=election.run_election_simulation,
                                 kwargs={
-                                    'election_attempt': 1,
-                                    'preselected_candidates_info': None,
-                                    'runoff_carryover_winner_name': None,
+                                    'election_attempt': current_status[
+                                        'attempt'],  # Usa tentativo corrente
+                                    'preselected_candidates_info':
+                                    None,  # Resetta sempre all'inizio da GUI
+                                    'runoff_carryover_winner_name':
+                                    None,  # Resetta sempre
                                     'continue_event':
                                     simulation_continue_event,
                                     'running_event': simulation_running_event,
@@ -227,48 +207,45 @@ def main_pygame_gui():
                                 })
                             simulation_thread.daemon = True
                             simulation_thread.start()
-                            simulation_running_event.set()  # Set running event
-                            # In modalità continua, settiamo l'evento qui per farlo partire
-                            # In modalità passo passo, non lo settiamo, aspetterà il primo click di "Next Round"
+                            simulation_running_event.set()
                             if not step_by_step_mode:
                                 simulation_continue_event.set()
 
-                    # Controllo pulsante Next Round (visibile/attivo solo in modalità passo-passo)
                     if step_by_step_mode and 'next_round_button_rect' in locals(
                     ) and next_round_button_rect.collidepoint(event.pos):
-                        # Only allow "Next Round" if the simulation is running AND waiting
                         if simulation_running_event.is_set(
                         ) and simulation_waiting_for_next:
-                            simulation_continue_event.set(
-                            )  # Signal simulation thread to proceed
-                            # simulation_waiting_for_next will be cleared by the thread itself when it proceeds
+                            simulation_continue_event.set()
+                            # Resetta subito in attesa della prossima attesa
+                            simulation_waiting_for_next = False
 
-                    # Controllo pulsante Quit
-                    # Usa 'quit_button_rect' in locals() per sicurezza
                     if 'quit_button_rect' in locals(
                     ) and quit_button_rect.collidepoint(event.pos):
-                        running = False  # Exit the main loop
+                        running = False
 
-                    # Controlla i click sugli sprite dei candidati visualizzati
-                    for rect, candidate_info in displayed_candidate_sprites:
-                        if rect.collidepoint(event.pos):
-                            # Visualizza gli attributi del candidato nel log
-                            utils.send_pygame_update(
-                                utils.UPDATE_TYPE_MESSAGE,
-                                f"\n--- Attributi per {candidate_info['name']} ---"
-                            )
-                            attributes_str = ", ".join([
-                                f"{key.replace('_', ' ').title()}: {value}"
-                                for key, value in
-                                candidate_info['attributes'].items()
-                            ])
-                            utils.send_pygame_update(
-                                utils.UPDATE_TYPE_MESSAGE,
-                                f"  Attributi: {attributes_str}")
-                            utils.send_pygame_update(
-                                utils.UPDATE_TYPE_MESSAGE,
-                                "--------------------------------------")
-                            break  # Esci dal ciclo dopo aver trovato uno sprite cliccato
+                    # Controlla click sui nomi dei candidati (se vogliamo ripristinare questa funzione)
+                    # for rect, candidate_info in displayed_candidate_text_rects:
+                    #     if rect.collidepoint(event.pos):
+                    #         # Visualizza gli attributi del candidato nel log
+                    #         utils.send_pygame_update(
+                    #             utils.UPDATE_TYPE_MESSAGE,
+                    #             f"\n--- Attributes for {candidate_info['name']} ---"
+                    #         )
+                    #         attributes_str = ", ".join([
+                    #             f"{key.replace('_', ' ').title()}: {value}"
+                    #             for key, value in
+                    #             candidate_info.get('attributes', {}).items() # Usa .get per sicurezza
+                    #         ])
+                    #         utils.send_pygame_update(
+                    #             utils.UPDATE_TYPE_MESSAGE,
+                    #             f"  Gender: {candidate_info.get('gender', 'N/A').title()}") # Mostra anche genere
+                    #         utils.send_pygame_update(
+                    #             utils.UPDATE_TYPE_MESSAGE,
+                    #             f"  Attributes: {attributes_str if attributes_str else 'N/A'}")
+                    #         utils.send_pygame_update(
+                    #             utils.UPDATE_TYPE_MESSAGE,
+                    #             "--------------------------------------")
+                    #         break
 
         # --- Process updates from simulation thread ---
         while not utils.pygame_update_queue.empty():
@@ -282,16 +259,34 @@ def main_pygame_gui():
                 log_messages.append(str(update_data))
                 if len(log_messages) > max_log_lines:
                     log_messages = log_messages[-max_log_lines:]
+            # --- Gestione Elettori Chiave (se si usasse un tipo dedicato) ---
+            # elif update_type == utils.UPDATE_TYPE_KEY_ELECTORS:
+            #     key_electors_log = update_data # Salva i dati per potenziale visualizzazione
+            #     # Logga anche i primi N
+            #     log_messages.append("\n--- Key Electors Identified ---")
+            #     for ke_idx, ke_info in enumerate(update_data):
+            #         if ke_idx < 5:
+            #              log_messages.append(f"  ID: {ke_info['id']}, Reasons: {', '.join(ke_info['reasons'])}")
+            #     if len(update_data) > 5:
+            #          log_messages.append("  ...")
+            #     if len(log_messages) > max_log_lines:
+            #         log_messages = log_messages[-max_log_lines:]
+            # --- Fine Gestione Elettori Chiave ---
 
             elif update_type == utils.UPDATE_TYPE_STATUS:
-                current_status.update(update_data)
-                # Check if the status indicates waiting for the next round
-                # MODIFICATO QUI: Controlla esplicitamente lo stato di attesa
-                if step_by_step_mode and update_data.get(
+                # Aggiorna solo le chiavi presenti in update_data
+                for key, value in update_data.items():
+                    if key in current_status:
+                        current_status[key] = value
+                    # Aggiorna il tentativo se fornito
+                    elif key == "attempt":
+                        current_status['attempt'] = value
+
+                # Gestione stato attesa
+                if step_by_step_mode and current_status.get(
                         "status") == "Waiting for Next Round":
                     simulation_waiting_for_next = True
                 else:
-                    # Reset waiting flag if status is not "Waiting for Next Round"
                     simulation_waiting_for_next = False
 
             elif update_type == utils.UPDATE_TYPE_RESULTS:
@@ -306,53 +301,46 @@ def main_pygame_gui():
                 if update_data and update_data.get("elected"):
                     governor_name = update_data.get("governor", "Unknown")
                     current_status["governor"] = governor_name
-                    utils.send_pygame_update(
-                        utils.UPDATE_TYPE_MESSAGE,
-                        f"\n{'*' * 30}\n*** GOVERNATORE {governor_name.upper()} ELETTO! ***\n{'*' * 30}\n",
+                    log_messages.append(
+                        f"\n{'*' * 30}\n*** GOVERNOR {governor_name.upper()} ELECTED! ***\n{'*' * 30}\n"
                     )
-                    # Prova a trovare le informazioni complete del candidato eletto per mostrare gli attributi
-                    # Assumiamo che current_results_data contenga gli attributi dall'ultimo round del collegio
                     elected_candidate_info = next(
                         (item for item in current_results_data
                          if item.get('name') == governor_name), None)
                     if elected_candidate_info and elected_candidate_info.get(
                             'attributes'):
-                        utils.send_pygame_update(
-                            utils.UPDATE_TYPE_MESSAGE,
-                            f"Attributi del Governatore {governor_name}:")
+                        log_messages.append(
+                            f"Governor Attributes {governor_name}:")
                         attributes_str = ", ".join([
                             f"{key.replace('_', ' ').title()}: {value}"
                             for key, value in
                             elected_candidate_info['attributes'].items()
                         ])
-                        utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
-                                                 f"  {attributes_str}")
-                        utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
-                                                 "-" * 30)
-
+                        log_messages.append(f"  {attributes_str}")
+                        log_messages.append("-" * 30)
                 else:
-                    utils.send_pygame_update(
-                        utils.UPDATE_TYPE_MESSAGE,
-                        f"\n{'=' * 30}\n--- STALLO ELETTORALE ---\n--- Nessun Governatore eletto dopo {config.MAX_ELECTION_ATTEMPTS} tentativi ---\n{'=' * 30}\n"
+                    log_messages.append(
+                        f"\n{'=' * 30}\n--- ELECTORAL DEADLOCK ---\n--- No Governor elected after {config.MAX_ELECTION_ATTEMPTS} attempts ---\n{'=' * 30}\n"
                     )
-                # Simulation finished
                 simulation_running_event.clear()
                 simulation_waiting_for_next = False
+                if len(log_messages) > max_log_lines:
+                    log_messages = log_messages[-max_log_lines:]
 
             elif update_type == utils.UPDATE_TYPE_ERROR:
-                utils.send_pygame_update(
-                    utils.UPDATE_TYPE_MESSAGE,
-                    f"\n{'!' * 30}\n!!! ERRORE SIMULAZIONE !!!\n!!! {update_data} !!!\n{'!' * 30}\n"
+                log_messages.append(
+                    f"\n{'!' * 30}\n!!! SIMULATION ERROR !!!\n!!! {update_data} !!!\n{'!' * 30}\n"
                 )
                 current_status["status"] = "Error"
-                # Simulation errored
                 simulation_running_event.clear()
                 simulation_waiting_for_next = False
+                if len(log_messages) > max_log_lines:
+                    log_messages = log_messages[-max_log_lines:]
 
         # --- Drawing ---
         screen.fill(config.BG_COLOR)
 
-        # Draw Status Area
+        # Draw Status Area (come prima)
         status_bg_surface = pygame.Surface(STATUS_AREA.size, pygame.SRCALPHA)
         status_bg_surface.fill((64, 64, 64, 192))
         screen.blit(status_bg_surface, STATUS_AREA.topleft)
@@ -360,214 +348,131 @@ def main_pygame_gui():
 
         status_y = STATUS_AREA.top + 5
         status_x_left = STATUS_AREA.left + 10
-        status_x_right = STATUS_AREA.left + 250
+        status_x_right = STATUS_AREA.left + 300  # Spostato un po' a destra
 
         if 'font' in locals() and font:
-            status_y += render_text(
+            h1, _ = render_text(
                 font,
                 f"Attempt: {current_status.get('attempt', '-')}/{config.MAX_ELECTION_ATTEMPTS}",
-                config.WHITE,
-                screen,
-                status_x_left,
-                status_y,
-            )
-            phase_line_y = status_y
-            status_y += render_text(
-                font,
-                f"Phase: {current_status.get('phase', 'N/A')}",
-                config.WHITE,
-                screen,
-                status_x_left,
-                status_y,
-            )
-            render_text(
-                font,
-                f"Round: {current_status.get('round', '-')}",
-                config.WHITE,
-                screen,
-                status_x_right,
-                phase_line_y,
-            )
-
-            status_text_y = status_y
+                config.WHITE, screen, status_x_left, status_y)
+            h2, _ = render_text(
+                font, f"Phase: {current_status.get('phase', 'N/A')}",
+                config.WHITE, screen, status_x_left, status_y + h1 + 2)
+            render_text(font, f"Round: {current_status.get('round', '-')}",
+                        config.WHITE, screen, status_x_right, status_y)
             current_status_text = current_status.get("status", "")
-            status_y += render_text(
-                font,
-                f"Status: {current_status_text}",
-                config.WHITE,
-                screen,
-                status_x_left,
-                status_y,
-            )
+            h3, _ = render_text(font, f"Status: {current_status_text}",
+                                config.WHITE, screen, status_x_left,
+                                status_y + h1 + h2 + 4)
             if current_status_text == "Governor Elected!" and "governor" in current_status:
-                render_text(
-                    font,
-                    f"Governor: {current_status['governor']}",
-                    config.GREEN,
-                    screen,
-                    status_x_right,
-                    status_text_y,
-                )
+                render_text(font, f"Governor: {current_status['governor']}",
+                            config.GREEN, screen, status_x_right,
+                            status_y + h1 + 2)  # Allineato con Round
             mode_text = "Mode: Step-by-Step" if step_by_step_mode else "Mode: Continuous"
-            render_text(
-                small_font,
-                mode_text,
-                config.WHITE,
-                screen,
-                status_x_left,
-                status_y + small_font.get_linesize() + 2,
-            )
+            render_text(small_font, mode_text, config.WHITE, screen,
+                        status_x_left,
+                        STATUS_AREA.bottom - small_font.get_linesize() - 5)
+        # ... (fallback else)
 
-        else:
-            screen.blit(
-                pygame.font.Font(None, config.PIXEL_FONT_SIZE).render(
-                    "Loading...", True, config.WHITE),
-                (STATUS_AREA.left + 10, STATUS_AREA.top + 10))
-
-        # Draw Visual Area
+        # --- Draw Visual Area (MODIFICATO) ---
         visual_bg_surface = pygame.Surface(VISUAL_AREA.size, pygame.SRCALPHA)
         visual_bg_surface.fill((32, 32, 32, 160))
         screen.blit(visual_bg_surface, VISUAL_AREA.topleft)
         pygame.draw.rect(screen, config.WHITE, VISUAL_AREA, 1)
 
-        # --- Draw Characters/Sprites in Visual Area ---
-        # Clear the list for the new frame
-        displayed_candidate_sprites = []
+        # Disegna i nomi dei candidati con colori basati sul genere
+        displayed_candidate_text_rects = [
+        ]  # Resetta la lista per questo frame
 
-        # Assuming current_results_data has candidates with sprite_key and name
+        # Assumiamo che current_results_data abbia candidati con 'name', 'gender', 'attributes'
         display_items = current_results_data
-        max_visual_candidates = 8
+        max_visual_candidates = 12  # Possiamo mostrare più nomi che sprite
         displayed_visual_items = display_items[:max_visual_candidates]
 
         num_display_visual = len(displayed_visual_items)
-        if num_display_visual > 0:
-            min_spacing = config.SPRITE_WIDTH + 10
-            total_required_width = num_display_visual * min_spacing
-            available_width = VISUAL_AREA.width - 20
-
-            if total_required_width > available_width:
-                sprite_spacing = available_width // num_display_visual if num_display_visual > 0 else 0
-            else:
-                sprite_spacing = min_spacing
-
+        if num_display_visual > 0 and 'small_font' in locals() and small_font:
+            num_columns = 3  # Numero di colonne per i nomi
+            col_width = VISUAL_AREA.width // num_columns
+            row_height = small_font.get_linesize() + 4  # Spazio tra le righe
             start_x = VISUAL_AREA.left + 10
+            start_y = VISUAL_AREA.top + 10
+            current_col = 0
+            current_row = 0
 
-            for i in range(num_display_visual):
-                item = displayed_visual_items[i]
-                candidate_name = item['name']
-                sprite_key = item.get('sprite_key')
-                candidate_attributes = item.get(
-                    'attributes', {})  # Assume attributes are in the item
+            for item in displayed_visual_items:
+                candidate_name = item.get('name', 'N/A')
+                gender = item.get('gender', 'unknown')
+                attributes = item.get('attributes',
+                                      {})  # Per tooltip se necessario
 
-                sprite_surface = None
-                if sprite_key and sprite_key in sprites:
-                    sprite_surface = sprites[sprite_key]
+                # Determina colore
+                text_color = config.WHITE  # Default
+                if gender == "female":
+                    text_color = config.PINK
+                elif gender == "male":
+                    text_color = config.LIGHT_BLUE
 
-                if sprite_surface:
-                    sprite_x = start_x + i * sprite_spacing + (
-                        sprite_spacing - sprite_surface.get_width()) // 2
-                    sprite_y = VISUAL_AREA.top + 10
+                # Calcola posizione
+                text_x = start_x + current_col * col_width
+                text_y = start_y + current_row * row_height
 
-                    sprite_draw_x = max(VISUAL_AREA.left + 2, sprite_x)
-                    sprite_draw_y = max(VISUAL_AREA.top + 2, sprite_y)
-                    sprite_rect = screen.blit(sprite_surface,
-                                              (sprite_draw_x, sprite_draw_y))
+                # Renderizza il testo
+                h, text_rect = render_text(small_font, candidate_name,
+                                           text_color, screen, text_x, text_y)
+                displayed_candidate_text_rects.append(
+                    (text_rect, item))  # Salva rect e info
 
-                    # Store the clickable area and candidate info
-                    displayed_candidate_sprites.append((sprite_rect, {
-                        'name':
-                        candidate_name,
-                        'attributes':
-                        candidate_attributes
-                    }))
+                # Controlla se il nome è sotto il mouse per tooltip
+                if text_rect.collidepoint(mouse_pos):
+                    clicked_candidate = item
+                    attributes = item.get('attributes', {})
+                    age = item.get('age', 'N/A')  # Recupera l'età
+                    gender = item.get('gender', 'unknown')
+                    attributes_str = ", ".join(
+                        [f"{k.replace('_',' ').title()}: {v}" for k, v in attributes.items()])
+                    # AGGIUNGI ETA' AL TOOLTIP
+                    tooltip_text = f"{candidate_name} (Age: {age}, Gender: {gender.title()})\nAttributes: {attributes_str if attributes_str else 'N/A'}"
 
-                    if 'small_font' in locals() and small_font:
-                        text_y = sprite_draw_y + sprite_surface.get_height(
-                        ) + 2
-                        text_surface = small_font.render(
-                            candidate_name, True, config.WHITE)
-                        text_x = sprite_x + (sprite_surface.get_width() -
-                                             text_surface.get_width()) // 2
-                        text_rect = text_surface.get_rect(topleft=(text_x,
-                                                                   text_y))
-                        text_rect.left = max(text_rect.left,
-                                             VISUAL_AREA.left + 2)
-                        text_rect.right = min(text_rect.right,
-                                              VISUAL_AREA.right - 2)
-                        if text_rect.left < text_rect.right:
-                            screen.blit(text_surface, text_rect.topleft)
+                # Aggiorna posizione per il prossimo nome
+                current_row += 1
+                if start_y + (current_row +
+                              1) * row_height > VISUAL_AREA.bottom - 10:
+                    current_row = 0
+                    current_col += 1
+                    if current_col >= num_columns:
+                        break  # Non ci stanno più colonne
 
-                else:
-                    # Placeholder drawing logic
-                    placeholder_size = 30
-                    placeholder_y_offset = (
-                        config.SPRITE_HEIGHT - placeholder_size
-                    ) // 2 if 'SPRITE_HEIGHT' in dir(config) else 0
-                    placeholder_x = start_x + i * sprite_spacing + (
-                        sprite_spacing - placeholder_size) // 2
-                    placeholder_y = VISUAL_AREA.top + 10 + placeholder_y_offset
-
-                    placeholder_draw_x = max(VISUAL_AREA.left + 2,
-                                             placeholder_x)
-                    placeholder_draw_y = max(VISUAL_AREA.top + 2,
-                                             placeholder_y)
-
-                    placeholder_rect = pygame.draw.rect(
-                        screen, config.GRAY,
-                        (placeholder_draw_x, placeholder_draw_y,
-                         placeholder_size, placeholder_size))
-
-                    # Store the clickable area and candidate info (even for placeholders)
-                    displayed_candidate_sprites.append((placeholder_rect, {
-                        'name':
-                        candidate_name,
-                        'attributes':
-                        candidate_attributes
-                    }))
-
-                    if 'small_font' in locals() and small_font:
-                        text_y = VISUAL_AREA.top + 10 + (
-                            config.SPRITE_HEIGHT
-                            if 'SPRITE_HEIGHT' in dir(config) else 40) + 2
-                        text_surface = small_font.render(
-                            candidate_name, True, config.WHITE)
-                        text_x = start_x + i * sprite_spacing + (
-                            sprite_spacing - text_surface.get_width()) // 2
-                        text_rect = text_surface.get_rect(topleft=(text_x,
-                                                                   text_y))
-                        text_rect.left = max(text_rect.left,
-                                             VISUAL_AREA.left + 2)
-                        text_rect.right = min(text_rect.right,
-                                              VISUAL_AREA.right - 2)
-                        if text_rect.left < text_rect.right:
-                            screen.blit(text_surface, text_rect.topleft)
-
-        # Draw Results Area (with bars)
+        # --- Draw Results Area (con barre, come prima) ---
         results_bg_surface = pygame.Surface(RESULTS_AREA.size, pygame.SRCALPHA)
         results_bg_surface.fill((48, 48, 48, 192))
         screen.blit(results_bg_surface, RESULTS_AREA.topleft)
         pygame.draw.rect(screen, config.WHITE, RESULTS_AREA, 1)
         if 'font' in locals() and font:
-            render_text(
-                font,
-                "Latest Results:",
-                config.WHITE,
-                screen,
-                RESULTS_AREA.left + 10,
-                RESULTS_AREA.top + 5,
-            )
+            _, _ = render_text(title_font, "Latest Results:", config.WHITE,
+                               screen, RESULTS_AREA.left + 10,
+                               RESULTS_AREA.top + 5)
             if current_results_data:
+                # Calcola max voti tra i risultati *correnti*
+                relevant_results = [
+                    item for item in current_results_data
+                    if item.get('votes', 0) > 0
+                ]  # Considera solo chi ha voti
                 max_votes = max(
-                    item['votes'] for item in
-                    current_results_data) if current_results_data else 1
-                bar_area_width = RESULTS_AREA.width - 20  # Padding for bars
+                    item['votes']
+                    for item in relevant_results) if relevant_results else 1
+
+                bar_area_width = RESULTS_AREA.width - 20
                 bar_height = 15
                 bar_spacing = 5
-                bar_start_y = RESULTS_AREA.top + 5 + font.get_linesize() + 10
+                bar_start_y = RESULTS_AREA.top + 5 + title_font.get_linesize(
+                ) + 10
 
-                sorted_results = sorted(current_results_data,
+                sorted_results = sorted(relevant_results,
                                         key=lambda x: x.get('votes', 0),
                                         reverse=True)
+                total_votes_this_round = sum(
+                    item['votes']
+                    for item in relevant_results) if relevant_results else 0
 
                 for i, item in enumerate(sorted_results):
                     if bar_start_y + i * (
@@ -578,215 +483,223 @@ def main_pygame_gui():
                         is_elected_this_round = item.get(
                             'elected_this_round', False)
                         is_overall_elected = (
-                            current_status_text == "Governor Elected!"
-                            and "governor" in current_status
-                            and candidate_name == current_status["governor"])
+                            current_status.get("status") == "Governor Elected!"
+                            and candidate_name
+                            == current_status.get("governor"))
 
-                        # Calcola la percentuale di voti
-                        total_votes_this_round = sum(
-                            item['votes'] for item in current_results_data
-                        ) if current_results_data else 0
                         vote_percentage = (
                             votes / total_votes_this_round
                         ) * 100 if total_votes_this_round > 0 else 0
 
                         bar_width = (votes / max_votes
                                      ) * bar_area_width if max_votes > 0 else 0
+                        bar_width = max(
+                            1,
+                            bar_width)  # Larghezza minima 1 pixel se ha voti
 
                         bar_color = config.GRAY
-                        if is_elected_this_round:
-                            bar_color = config.GREEN
-                        elif is_overall_elected:
-                            bar_color = config.BLUE
+                        if is_elected_this_round or is_overall_elected:
+                            bar_color = config.GREEN  # Verde se eletto nel round o governatore finale
 
                         bar_rect = pygame.Rect(
                             RESULTS_AREA.left + 10,
                             bar_start_y + i * (bar_height + bar_spacing),
                             bar_width, bar_height)
                         pygame.draw.rect(screen, bar_color, bar_rect)
-                        pygame.draw.rect(screen, config.WHITE, bar_rect, 1)
+                        pygame.draw.rect(screen, config.WHITE, bar_rect,
+                                         1)  # Bordo
 
                         if 'small_font' in locals() and small_font:
-                            # Includi la percentuale nel testo
+                            name_text = f"{candidate_name}: {votes} ({vote_percentage:.1f}%)"
                             name_surface = small_font.render(
-                                f"{candidate_name}: {votes} ({vote_percentage:.1f}%)",
-                                True, config.WHITE)
-                            # Posiziona il testo sulla barra (se abbastanza larga) o a destra
-                            text_x = bar_rect.right + 5  # Posizione iniziale a destra
-                            if bar_width > name_surface.get_width(
-                            ) + 10:  # Spazio sufficiente sulla barra
-                                text_x = bar_rect.left + 5  # Posizione sulla barra
+                                name_text, True, config.WHITE)
+                            text_x = bar_rect.left + 5
+                            # Se la barra è troppo stretta, scrivi a destra
+                            if bar_width < name_surface.get_width() + 10:
+                                text_x = bar_rect.right + 5
 
-                            name_y = bar_rect.top + (
-                                bar_height - name_surface.get_height()
-                            ) // 2  # Centratura verticale
-                            text_x = min(text_x, RESULTS_AREA.right - 10 -
-                                         name_surface.get_width()
-                                         )  # Evita overflow a destra
+                            name_y = bar_rect.centery - name_surface.get_height(
+                            ) // 2
+                            # Limita la x per non uscire dall'area
+                            text_x = min(
+                                text_x, RESULTS_AREA.right - 10 -
+                                name_surface.get_width())
                             screen.blit(name_surface, (text_x, name_y))
-
                     else:
                         if 'small_font' in locals() and small_font:
                             render_text(
                                 small_font, "...", config.WHITE, screen,
                                 RESULTS_AREA.left + 10,
                                 bar_start_y + i * (bar_height + bar_spacing))
-                        break
+                        break  # Esce dal loop se non c'è più spazio verticale
+        # ... (fallback else)
 
-        else:
-            screen.blit(
-                pygame.font.Font(None, config.PIXEL_FONT_SIZE).render(
-                    "Results Loading...", True, config.WHITE),
-                (RESULTS_AREA.left + 10, RESULTS_AREA.top + 10))
-
-        # Draw Log Area
+        # Draw Log Area (come prima)
         log_bg_surface = pygame.Surface(LOG_AREA.size, pygame.SRCALPHA)
         log_bg_surface.fill((48, 48, 48, 192))
         screen.blit(log_bg_surface, LOG_AREA.topleft)
         pygame.draw.rect(screen, config.WHITE, LOG_AREA, 1)
         if 'small_font' in locals() and small_font:
-            render_text(small_font, "Log:", config.WHITE, screen,
-                        LOG_AREA.left + 10, LOG_AREA.top + 5)
-            log_y = LOG_AREA.top + 5 + small_font.get_linesize() + 5
-            for msg in log_messages:
+            _, _ = render_text(title_font, "Log:", config.WHITE, screen,
+                               LOG_AREA.left + 10, LOG_AREA.top + 5)
+            log_y = LOG_AREA.top + 5 + title_font.get_linesize() + 5
+            # Mostra i messaggi dal più recente al più vecchio
+            for msg in reversed(log_messages):
                 if log_y + small_font.get_linesize() <= LOG_AREA.bottom - 5:
-                    render_text(small_font, msg, config.WHITE, screen,
-                                LOG_AREA.left + 10, log_y)
-                    log_y += small_font.get_linesize()
-                else:
-                    break
-        else:
-            screen.blit(
-                pygame.font.Font(None, config.PIXEL_FONT_SIZE).render(
-                    "Log Loading...", True, config.WHITE),
-                (LOG_AREA.left + 10, LOG_AREA.top + 10))
+                    # Word wrap manuale semplice
+                    words = msg.split(' ')
+                    lines = []
+                    current_line = ""
+                    max_width = LOG_AREA.width - 20  # Larghezza massima testo
+                    for word in words:
+                        test_line = current_line + word + " "
+                        test_surface = small_font.render(
+                            test_line, True, config.WHITE)
+                        if test_surface.get_width() < max_width:
+                            current_line = test_line
+                        else:
+                            lines.append(current_line)
+                            current_line = word + " "
+                    lines.append(current_line)  # Aggiunge l'ultima linea
 
-        # Draw Flag Area
+                    # Renderizza le linee wrappate
+                    temp_y = log_y
+                    for line in lines:
+                        if temp_y + small_font.get_linesize(
+                        ) <= LOG_AREA.bottom - 5:
+                            render_text(small_font, line.strip(), config.WHITE,
+                                        screen, LOG_AREA.left + 10, temp_y)
+                            temp_y += small_font.get_linesize()
+                        else:
+                            break  # Non c'è più spazio verticale nel log
+                    log_y = temp_y  # Aggiorna y per il prossimo messaggio
+                    if log_y >= LOG_AREA.bottom - 5:
+                        break  # Esce se l'area log è piena
+                else:
+                    break  # Esce se l'area log è piena
+        # ... (fallback else)
+
+        # Draw Flag Area (come prima)
+        # ... (logica flag esistente) ...
         flag_area_rect = pygame.Rect(
-            STATUS_AREA.left + 300,
+            STATUS_AREA.right - 70,
             STATUS_AREA.top + 5,
             60,
             STATUS_AREA.height - 10,
         )
-
         if flag_state is True:
             stripe_width = flag_area_rect.width // 3
             stripe_height = flag_area_rect.height
-            pygame.draw.rect(
-                screen,
-                config.LIGHT_BLUE,
-                (
-                    flag_area_rect.left,
-                    flag_area_rect.top,
-                    stripe_width,
-                    stripe_height,
-                ),
-            )
-            pygame.draw.rect(
-                screen,
-                config.BLUE,
-                (
-                    flag_area_rect.left + stripe_width,
-                    flag_area_rect.top,
-                    stripe_width,
-                    stripe_height,
-                ),
-            )
-            pygame.draw.rect(
-                screen,
-                config.LIGHT_BLUE,
-                (
-                    flag_area_rect.left + 2 * stripe_width,
-                    flag_area_rect.top,
-                    stripe_width,
-                    stripe_height,
-                ),
-            )
+            pygame.draw.rect(screen, config.LIGHT_BLUE,
+                             (flag_area_rect.left, flag_area_rect.top,
+                              stripe_width, stripe_height))
+            pygame.draw.rect(screen, config.BLUE,
+                             (flag_area_rect.left + stripe_width,
+                              flag_area_rect.top, stripe_width, stripe_height))
+            pygame.draw.rect(screen, config.LIGHT_BLUE,
+                             (flag_area_rect.left + 2 * stripe_width,
+                              flag_area_rect.top, stripe_width, stripe_height))
         elif flag_state is False:
             pygame.draw.rect(screen, config.BLACK, flag_area_rect)
         pygame.draw.rect(screen, config.WHITE, flag_area_rect, 1)
 
-        # Draw Button Area Background already done before button drawing
-
-        # Draw Buttons
+        # Draw Button Area (come prima)
         BUTTON_WIDTH = 150
         BUTTON_HEIGHT = BUTTON_AREA.height - 10
         button_padding = 20
-        visible_buttons_count = 2
-        if step_by_step_mode:
-            visible_buttons_count += 1
-
+        visible_buttons_count = 2 + (1 if step_by_step_mode else 0)
         total_visible_buttons_width = BUTTON_WIDTH * visible_buttons_count + button_padding * (
             visible_buttons_count - 1 if visible_buttons_count > 1 else 0)
-
         button_start_x = BUTTON_AREA.left + (BUTTON_AREA.width -
                                              total_visible_buttons_width) // 2
         button_y = BUTTON_AREA.top + 5
 
-        # Start Button
-        start_button_rect = pygame.Rect(button_start_x, button_y, BUTTON_WIDTH,
-                                        BUTTON_HEIGHT)
         start_button_enabled = not simulation_running_event.is_set()
-        draw_button(screen,
-                    start_button_rect,
-                    config.GREEN,
-                    "Start Election",
-                    font,
-                    config.WHITE,
-                    enabled=start_button_enabled)
-
-        # Next Round Button (Conditional visibility based on step_by_step_mode)
+        start_button_rect = draw_button(screen,
+                                        pygame.Rect(button_start_x, button_y,
+                                                    BUTTON_WIDTH,
+                                                    BUTTON_HEIGHT),
+                                        config.GREEN,
+                                        "Start Election",
+                                        font,
+                                        config.WHITE,
+                                        enabled=start_button_enabled)
         current_button_x = start_button_rect.right + button_padding
+
         if step_by_step_mode:
-            next_round_button_rect = pygame.Rect(current_button_x, button_y,
-                                                 BUTTON_WIDTH, BUTTON_HEIGHT)
-            # Enable Next Round button only if simulation is running AND waiting for input
             next_round_button_enabled = simulation_running_event.is_set(
             ) and simulation_waiting_for_next
-            draw_button(screen,
-                        next_round_button_rect,
-                        config.BLUE,
-                        "Next Round",
-                        font,
-                        config.WHITE,
-                        enabled=next_round_button_enabled)
+            next_round_button_rect = draw_button(
+                screen,
+                pygame.Rect(current_button_x, button_y, BUTTON_WIDTH,
+                            BUTTON_HEIGHT),
+                config.BLUE,
+                "Next Round",
+                font,
+                config.WHITE,
+                enabled=next_round_button_enabled)
             current_button_x = next_round_button_rect.right + button_padding
 
-        # Quit Button
-        quit_button_rect = pygame.Rect(current_button_x, button_y,
-                                       BUTTON_WIDTH, BUTTON_HEIGHT)
-        draw_button(screen,
-                    quit_button_rect,
-                    config.RED,
-                    "Quit",
-                    font,
-                    config.WHITE,
-                    enabled=True)
+        quit_button_rect = draw_button(screen,
+                                       pygame.Rect(current_button_x, button_y,
+                                                   BUTTON_WIDTH,
+                                                   BUTTON_HEIGHT),
+                                       config.RED,
+                                       "Quit",
+                                       font,
+                                       config.WHITE,
+                                       enabled=True)
+
+        # --- Tooltip Drawing ---
+        if tooltip_text:
+            tooltip_lines = tooltip_text.split('\n')
+            max_tooltip_width = 0
+            tooltip_surfaces = []
+            total_tooltip_height = 0
+            line_spacing = 2
+
+            for line in tooltip_lines:
+                surf = small_font.render(line, True, config.BLACK)
+                tooltip_surfaces.append(surf)
+                max_tooltip_width = max(max_tooltip_width, surf.get_width())
+                total_tooltip_height += surf.get_height() + line_spacing
+
+            tooltip_rect = pygame.Rect(0, 0, max_tooltip_width + 10,
+                                       total_tooltip_height + 5)
+            tooltip_rect.topleft = (mouse_pos[0] + 15, mouse_pos[1] + 10
+                                    )  # Offset da mouse
+
+            # Assicura che il tooltip rimanga nello schermo
+            tooltip_rect.clamp_ip(screen.get_rect())
+
+            # Disegna sfondo e testo
+            pygame.draw.rect(screen, config.YELLOW,
+                             tooltip_rect)  # Sfondo giallo
+            pygame.draw.rect(screen, config.BLACK, tooltip_rect,
+                             1)  # Bordo nero
+            current_tooltip_y = tooltip_rect.top + 5
+            for surf in tooltip_surfaces:
+                screen.blit(surf, (tooltip_rect.left + 5, current_tooltip_y))
+                current_tooltip_y += surf.get_height() + line_spacing
 
         pygame.display.flip()
-
         clock.tick(60)
 
     pygame.quit()
-    # Signal simulation thread to stop
-    simulation_continue_event.set()
+    simulation_continue_event.set(
+    )  # Segnala al thread di terminare se in attesa
     if simulation_thread and simulation_thread.is_alive():
-        print("Pygame quit, attempting to signal simulation thread to stop...")
-        simulation_thread.join(0.5)
+        print("Pygame quit, attempting to join simulation thread...")
+        simulation_thread.join(0.5)  # Attendi un po' che il thread termini
 
 
-# --- Run the Pygame GUI ---
+# Entry point (modificato per rimuovere check divisibilità)
 if __name__ == "__main__":
-    # Initial configuration checks
     num_district_winners_needed_check = (config.NUM_GRAND_ELECTORS -
                                          config.NUM_PRESELECTED_CANDIDATES)
-    if (num_district_winners_needed_check < 0
-            or num_district_winners_needed_check % config.NUM_DISTRICTS != 0):
+    if num_district_winners_needed_check < 0:
         print(
-            f"Configuration Error: With NUM_PRESELECTED_CANDIDATES={config.NUM_PRESELECTED_CANDIDATES}, the number of district winners needed ({num_district_winners_needed_check}) is not compatible with NUM_DISTRICTS={config.NUM_DISTRICTS}. This means the remaining candidates cannot be evenly distributed among districts."
-        )
-        print(
-            "Adjust NUM_GRAND_ELECTORS, NUM_DISTRICTS, or NUM_PRESELECTED_CANDIDATES to make (NUM_GRAND_ELECTORS - NUM_PRESELECTED_CANDIDATES) divisible by NUM_DISTRICTS."
+            f"Configuration Error: Negative district winners needed ({num_district_winners_needed_check})."
         )
         sys.exit()
 

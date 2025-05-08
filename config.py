@@ -34,6 +34,11 @@ if NUM_GRAND_ELECTORS < _min_grand_electors:  # Assicurazione finale
                           TARGET_DIVISOR_ELECTORS) * TARGET_DIVISOR_ELECTORS
 
 MIN_ELECTOR_AGE = 20
+CANDIDATE_AGE_RANGE = (30, 75)  # NUOVO: Range età candidati (min, max)
+PARTY_IDS = ["Reds", "Blues", "Greens", "Golds",
+             "Independent"]  # NUOVO: Possibili partiti
+# NUOVO: Pesi per assegnazione casuale (somma a 1)
+PARTY_ID_ASSIGNMENT_WEIGHTS = [0.25, 0.25, 0.15, 0.15, 0.20]
 
 # Configuration Phase 1: District Elections
 # Distretti casuali, almeno 10, ma legati anche a NUM_GRAND_ELECTORS
@@ -64,13 +69,34 @@ MAX_ELECTION_ATTEMPTS = 6
 
 STEP_BY_STEP_MODE_DEFAULT = False
 
+# --- Network Configuration (NUOVO) ---
+USE_SOCIAL_NETWORK = True  # Imposta a True per attivare l'influenza della rete
+# Parametri per Watts-Strogatz Small-World Graph:
+# k: Ogni elettore è inizialmente connesso a k vicini più prossimi (numero pari)
+NETWORK_AVG_NEIGHBORS = 6
+# p: Probabilità di riconnettere un arco a un nodo casuale
+NETWORK_REWIRING_PROB = 0.1
+
+# Parametri per Influenza Sociale (Modello Media Pesata)
+# Alpha: Quanto peso viene dato alla media dei vicini (0=nessuna influenza, 1=solo vicini)
+SOCIAL_INFLUENCE_STRENGTH = 0.05
+SOCIAL_INFLUENCE_ITERATIONS = 1   # Quante volte applicare l'influenza per round
 
 ### AI INTEGRATION ###
 # Grand Elector "AI" voting parameters
 ATTRIBUTE_RANGE = (1, 5)
 ELECTOR_IDEAL_PREFERENCE_RANGE = (1, 5)
+# NUOVI Parametri per Media Literacy
+MEDIA_LITERACY_RANGE = (1, 5)  # Range del punteggio (1=Basso, 5=Alto)
+# Fattore di effetto: quanto la literacy riduce l'impatto/suscettibilità.
+# Es: 0.2 significa che max literacy (normalizzata a 1) riduce l'effetto del 20%.
+MEDIA_LITERACY_EFFECT_FACTOR = random.uniform(0.1, 0.3)
 ELECTOR_ATTRIBUTE_MISMATCH_PENALTY_FACTOR = random.uniform(0.3, 0.7)
 MAX_ELECTOR_LEANING_BASE = random.randint(8, 12)
+# NUOVO: Range per il peso dato all'identità (vs policy)
+IDENTITY_WEIGHT_RANGE = (0.1, 0.8)
+# NUOVO: Fattore del bonus massimo per corrispondenza partito (es. 0.6 => 60% di MAX_ELECTOR_LEANING_BASE)
+IDENTITY_MATCH_BONUS_FACTOR = 0.6
 ELECTOR_RANDOM_LEANING_VARIANCE = random.uniform(0.5, 1.5)
 ELECTOR_MOMENTUM_FACTOR = random.uniform(
     0.1, 0.25)  # Aumentata la possibile variabilità
@@ -80,10 +106,16 @@ ELECTOR_ATTRIBUTE_WEIGHT_RANGE = (0, 7)
 ELECTOR_TRAITS = [
     "Loyal", "Pragmatic", "Idealistic", "Swing Voter", "Risk-Averse",
     "Easily Influenced", "Bandwagoner", "Contrarian", "AntiEstablishment",
-    # Esempi di nuovi tratti (richiedono logica in voting.py)
-    "CharismaFocused"
+    "CharismaFocused", "Underdog Supporter", "Confirmation Prone",
+    "Motivated Reasoner", "Strong Partisan"
+    # Potremmo aggiungere un tratto "Media Savvy" che aumenta la literacy? Per ora no.
 ]
-ELECTOR_TRAIT_COUNT = random.randint(1, 3)  # Numero variabile di tratti
+# Aumentato leggermente max numero tratti
+ELECTOR_TRAIT_COUNT = random.randint(1, 6)
+# NUOVO: Range per il peso dato all'identità (vs policy)
+IDENTITY_WEIGHT_RANGE = (0.1, 0.8)
+# NUOVO: Fattore del bonus massimo per corrispondenza partito (es. 0.6 => 60% di MAX_ELECTOR_LEANING_BASE)
+IDENTITY_MATCH_BONUS_FACTOR = 0.6
 
 # Elector Trait Modifiers
 ELECTOR_SUSCEPTIBILITY_BASE = random.uniform(
@@ -98,6 +130,16 @@ STRATEGIC_VOTING_TRAIT_MULTIPLIER_PRAGMATIC = random.uniform(1.3, 1.7)
 STRATEGIC_VOTING_TRAIT_MULTIPLIER_IDEALISTIC = random.uniform(0.6, 0.9)
 STRATEGIC_VOTING_TRAIT_PENALTY_IDEALISTIC_INTEGRITY = random.uniform(1.8, 2.5)
 STRONGLY_DISLIKED_THRESHOLD_FACTOR = random.uniform(0.2, 0.4)
+# NUOVO: Soglia per identificare elettori swing
+ELECTOR_SWING_THRESHOLD = random.uniform(0.5, 1.5)
+
+# Cognitive Bias Parameters
+BANDWAGON_EFFECT_FACTOR = random.uniform(0.1, 0.25)
+UNDERDOG_EFFECT_FACTOR = random.uniform(0.1, 0.25)
+MAX_BIAS_LEANING_ADJUSTMENT = random.uniform(0.8, 1.8)
+CONFIRMATION_BIAS_FACTOR = random.uniform(1.1, 1.4)
+# NUOVO: Fattore di riduzione per info incongruenti (es. 0.6 => riduce del 60%)
+MOTIVATED_REASONING_FACTOR = random.uniform(0.3, 0.6)
 
 # Candidate Campaign Parameters
 INFLUENCE_ELECTORS_PER_CANDIDATE = random.randint(max(
@@ -119,6 +161,8 @@ CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE = (_min_alloc, _max_alloc)
 CAMPAIGN_ALLOCATION_INFLUENCE_FACTOR = random.uniform(0.03, 0.08)
 CAMPAIGN_ALLOCATION_SUCCESS_CHANCE_FACTOR = random.uniform(0.003, 0.008)
 MAX_CAMPAIGN_INFLUENCE_PER_ATTEMPT = random.uniform(2.0, 4.0)
+# NUOVO: Per normalizzare il potential score nell'allocazione budget
+MAX_TARGETING_POTENTIAL_SCORE = 25.0
 
 
 ### CITIZEN AI INTEGRATION (for District Elections) ###
@@ -142,20 +186,25 @@ CITIZEN_TRAIT_RANDOM_INCLINED_BIAS = random.uniform(0.8, 1.5)
 
 # --- Pygame Configuration ---
 PIXEL_FONT_SIZE = 18
-BLOCK_SIZE = 10
+BLOCK_SIZE = 10  # Sembra non utilizzato, ma presente nel file originale
+
+# NUOVE COSTANTI PER GLI SPRITE:
+SPRITE_WIDTH = 32  # Modifica questo valore alla larghezza effettiva dei tuoi sprite
+SPRITE_HEIGHT = 32  # Modifica questo valore all'altezza effettiva dei tuoi sprite
 
 # Colors
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
-BLUE = (0, 0, 255)
+BLUE = (0, 0, 255)  # Blu standard
 YELLOW = (255, 255, 0)
 ORANGE = (255, 165, 0)
 CYAN = (0, 255, 255)
 GRAY = (128, 128, 128)
 DARK_GRAY = (64, 64, 64)
-LIGHT_BLUE = (173, 216, 230)
+LIGHT_BLUE = (173, 216, 230)  # Azzurro chiaro (già presente)
+PINK = (255, 182, 193)       # Rosa chiaro (NUOVO)
 
 BG_COLOR = DARK_GRAY
 
@@ -164,12 +213,18 @@ WINDOW_TITLE = "Anthalys Governor Election Simulation"
 # Image Paths
 IMAGE_PATHS = {
     "character_male_dark": "assets/characters/darkmale.png",
+    # Assicurati che questo file esista
     "character_male_light": "assets/characters/lightmale.png",
     "character_female_dark": "assets/characters/darkfemale.png",
     "character_female_light": "assets/characters/lightfemale.png",
-    # Aggiungi qui altri path se hai più spritesheet, es:
-    # "character_male_tanned": "assets/characters/maletanned.png",
-    # "character_female_tanned": "assets/characters/femaletanned.png",
+    # Assicurati che questo file esista
+    "character_male_tanned": "assets/characters/maletanned.png",
+    # Assicurati che questo file esista
+    "character_male_tanned2": "assets/characters/maletanned2.png",
+    # Assicurati che questo file esista
+    "character_female_tanned": "assets/characters/femaletanned.png",
+    # Assicurati che questo file esista
+    "character_female_tanned2": "assets/characters/femaletanned2.png",
 }
 
 # Event Parameters
@@ -187,10 +242,7 @@ EVENT_ENDORSEMENT_BASE_PROB = 0.05
 # Influenza sull'orientamento (leaning)
 EVENT_ENDORSEMENT_IMPACT_RANGE = (0.1, 0.3)
 
-# Definizioni per altri eventi (da implementare in election.py)
-# EVENT_POLICY_SHIFT_PROB = 0.1
-# EVENT_POLICY_SHIFT_IMPACT_FACTOR = random.uniform(0.05, 0.1)
-# EVENT_CANDIDATE_GAFFE_PROB = 0.08
-# EVENT_CANDIDATE_GAFFE_IMPACT_FACTOR = random.uniform(0.05, 0.15) # Impatto negativo
-# EVENT_CANDIDATE_BREAKTHROUGH_PROB = 0.07
-# EVENT_CANDIDATE_BREAKTHROUGH_IMPACT_FACTOR = random.uniform(0.05, 0.15) # Impatto positivo
+# Variabile globale per il tema caldo corrente, può essere None
+CURRENT_HOT_TOPIC = None
+# CURRENT_HOT_TOPIC può essere una stringa tipo "social_vision", "ethical_integrity", etc.
+# Viene impostato da eventi casuali in election.py

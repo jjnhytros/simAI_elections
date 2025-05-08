@@ -1,29 +1,69 @@
-1. Modelli di Votanti più Sofisticati (Citizen/Elector AI):
-   - [x] Personalità Complesse: Invece di semplici preferenze sugli attributi, ogni votante potrebbe avere una personalità (es. "fedele al partito", "indeciso", "influenzabile", "attento ai dettagli") che modella come reagisce alla campagna, alle notizie o al momentum. Potresti usare semplici regole basate su tratti o modelli di Machine Learning addestrati su dati simulati di voto.
-   - [x] Apprendimento: I votanti (specialmente gli Elettori del Collegio, essendo un gruppo più piccolo e significativo) potrebbero "imparare" nel tempo, adattando le loro preferenze o la loro strategia di voto in base ai risultati dei round precedenti e alle azioni dei candidati. Il Reinforcement Learning potrebbe essere usato per addestrare agenti votanti a massimizzare un certo "obiettivo" (es. eleggere il candidato più vicino ai propri ideali, o impedire l'elezione del candidato più odiato).
-2. Miglioramenti alla GUI
-   - [x] Visualizzazione più dettagliata o diversa dei risultati (es. grafici semplici, barre).
-   - [x] Aggiungere interazioni utente (es. un pulsante "Start Election", "Next Round" in modalità passo passo, "Quit"
-   - [x] Visualizzare gli attributi dei candidati selezionati (es. cliccando su uno sprite).
-   - [x] Mostrare un riepilogo finale più accattivante.
-3. Miglioramenti alla Simulazione
-   - [P] Aggiungere una "simulazione" della campagna elettorale più complessa (es. budget, eventi pubblici, e altro ancora). - **Include budget e temi di campagna. Prossimo passo: Legare budget all'efficacia della campagna.**
-   - [x] Rendere i tratti degli elettori o dei cittadini più influenti o con effetti più vari sulla votazione o sulla suscettibilità.
-   - [x] Introdurre eventi casuali che possono influenzare le preferenze o la partecipazione.
-   - [x] Diversificare i criteri per il voto strategico.
-   - [ ] Gestione Automatica Candidati Distrettuali: Implementare una logica per assicurare che il numero di candidati eletti dai distretti sia divisibile per il numero di distretti, aggiungendo il numero minimo di candidati necessari in caso di resto.
+# TODO - simAI_elections
 
-1. Strategie di Campagna Dinamiche (Candidate AI):
-   - [x] Targeting Elettori: Invece di influenzare elettori casuali, i candidati potrebbero usare l'AI per identificare gli elettori più "swing" (quelli le cui preferenze sono più vicine o potenzialmente influenzabili) e concentrare lì gli sforzi della campagna.
-   - [x] Selezione dei Temi: I candidati, in base ai loro attributi e alle preferenze percepite dei votanti (o dei dati simulati), potrebbero scegliere su quali temi focalizzare la loro campagna in ogni round. Un modello potrebbe analizzare le "distanze" medie dei votanti dai propri attributi e decidere quale attributo promuovere maggiormente.
-   - [ ] Adattamento alla Competizione: L'AI dei candidati potrebbe analizzare i risultati dei round precedenti e le "mosse" degli altri candidati per adattare la propria strategia di campagna, magari attaccando i rivali o difendendo i propri punti di forza.
+(Legenda: [x] = Completato, [P] = Parzialmente Completato, [ ] = Da Fare, [N/A] = Non Applicabile/Riconsiderato)
 
-2. Generazione Dinamica di Eventi/Notizie:
-   - [x] Eventi Casuali Influenzati: L'AI potrebbe generare eventi casuali (es. "scandalo per candidato X", "nuovo problema sociale emerge") che influenzano le preferenze dei votanti in base agli attributi coinvolti e alla "gravità" dell'evento. L'AI potrebbe anche rendere alcuni eventi più probabili in base agli attributi dei candidati o allo stato attuale della simulazione.
+1.  **Modelli di Votanti più Sofisticati (Citizen/Elector AI):**
+    * [x] Personalità Complesse (Tratti base implementati).
+    * [P] Bias Cognitivi:
+        * [P] Effetto Bandwagon/Underdog (logica base implementata).
+        * [P] Bias di Conferma (logica base implementata in campagna).
+        * [P] Ragionamento Motivato (logica base implementata negli eventi).
+        * [ ] Hindsight Bias / Altri Bias (Implementare meccanismi aggiuntivi, es. LIR - da PDF).
+    * [P] Voto Basato su Identità vs. Policy (Implementato `party_id`, `identity_weight` e calcolo leaning combinato).
+    * [P] Influenza Reti Sociali Esplicite (Implementato grafo Watts-Strogatz e modello influenza media pesata).
+    * [P] Alfabetizzazione Mediatica (Aggiunto attributo e influenza base su campagna/eventi - da PDF).
+    * [ ] Apprendimento Agenti (Elettori del Collegio potrebbero adattare strategie).
 
-3. Generazione di Contenuti Testuali (Natural Language Generation - NLG):
-   - [ ] Discorsi Più Variati: Potresti usare modelli NLG (anche semplici basati su template, o più complessi se hai librerie dedicate) per generare discorsi o messaggi di campagna più variegati e specifici per ogni candidato, basandosi sui loro attributi e sull'evoluzione della campagna. Ad esempio, un candidato con alta "social_vision" potrebbe generare discorsi più incentrati sul benessere comunitario.
+2.  **Miglioramenti alla GUI**
+    * [x] Visualizzazione risultati con barre.
+    * [x] Interazioni utente base (Start, Next Round, Quit).
+    * [P] Visualizzazione Info Candidati:
+        * [x] Rimossi sprite.
+        * [x] Nomi colorati per genere.
+        * [P] Visualizzazione attributi, età e partito tramite tooltip.
+    * [x] Riepilogo finale base.
+    * [ ] Visualizzazione Avanzata Preferenze Elettori (Mappa/distribuzione leanings - richiede GUI dedicata).
+    * [P] Visualizzazione Elettori Chiave:
+        * [P] Backend identifica elettori swing/influenzabili (loggati).
+        * [ ] GUI deve visualizzare queste informazioni.
+    * [ ] Dashboard Interattivo "What-If" (GUI complessa).
+    * [ ] Visualizzazione Reti Sociali (GUI dedicata).
 
-4. Analisi e Visualizzazione Avanzata:
-   - [ ] Visualizzazione delle Preferenze: Potresti visualizzare non solo i voti, ma anche la "mappa" delle preferenze degli elettori e come cambiano round dopo round. Questo richiederebbe una rappresentazione visiva delle "vicinanze" tra elettori e candidati nello spazio degli attributi.
-   - [ ] Identificazione Elettori Chiave: L'AI potrebbe identificare gli elettori le cui preferenze hanno l'impatto maggiore sull'elezione o che sono più indecisi, evidenziandoli nella GUI.
+3.  **Miglioramenti alla Simulazione**
+    * [P] Simulazione Campagna Elettorale più Complessa:
+        * [x] Budget e temi inclusi.
+        * [P] Legame Budget-Efficacia (Allocazione strategica budget).
+        * [ ] Rendimenti decrescenti / Impatto budget totale.
+        * [ ] Eventi Pubblici specifici (dibattiti, rally).
+    * [x] Influenza Tratti Elettori/Cittadini (Implementata, aggiunto "Strong Partisan").
+    * [P] Eventi Casuali:
+        * [x] Logica base implementata.
+        * [P] Eventi influenzati dallo stato, `CURRENT_HOT_TOPIC`.
+        * [P] Applicato Motivated Reasoning & Media Literacy all'impatto.
+        * [ ] Modellare Ecosistemi Mediatici (bias sorgenti, etc. - da PDF).
+    * [P] Voto Strategico (Logica base implementata).
+    * [N/A] Gestione Automatica Candidati Distrettuali (OK).
+    * [ ] Implementare Sistemi Elettorali Diversi (es. RCV - da PDF).
+    * [x] Generazione Candidati Migliorata (Genere, Unicità, Età, Attributi correlati, Partito).
+
+4.  **Strategie di Campagna Dinamiche (Candidate AI):**
+    * [P] Targeting Elettori (Basato su potenziale).
+    * [P] Selezione dei Temi (Base su attributi + hot topic).
+    * [ ] Adattamento alla Competizione (Analisi avversari, etc. - richiede AI avanzata - da PDF).
+    * [ ] IA per Ottimizzazione Allocazione Risorse (Simulare CRM - da PDF).
+
+5.  **Generazione Dinamica di Eventi/Notizie:**
+    * [P] Eventi Casuali Influenzati (Implementati, con bias/literacy).
+
+6.  **Generazione di Contenuti Testuali (NLG):**
+    * [P] Discorsi/Oath Più Variati (Migliorata funzione).
+    * [ ] Generazione Notizie/Post Social Media Simulati (Usare NLG - da PDF).
+
+7.  **Integrazione Dati, Parametrizzazione e Validazione (Principi dal Documento PDF):**
+    * [ ] Basare Agenti su Dati Reali.
+    * [ ] Calibrazione Parametri.
+    * [ ] Validazione Multi-Sfaccettata.
+
+8.  **IA e LLM (Obiettivi a Lungo Termine dal Documento PDF):**
+    * [ ] Agenti Potenziati da LLM.
+    * [ ] Approccio Ibrido LLM/Regole.
