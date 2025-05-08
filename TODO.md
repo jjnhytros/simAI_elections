@@ -80,5 +80,5 @@
     d.  [x] Memorizzare il budget iniziale della campagna.
     e.  [x] Se viene generato un candidato con un nome nel db, utilizzare quello già presente nel db (Caricamento base implementato in generazione).
     f.  [x] Memorizzare e aggiornare il budget rimanente della campagna (Corretto in `simulate_campaigning`).
-    g.  [ ] Memorizzare statistiche aggregate per ogni candidato (es. vittorie, sconfitte, voti ricevuti).
-    h.  [P] Aggiornare i dati del candidato nel DB al termine di ogni elezione/round rilevante (Budget aggiornato durante la campagna, altre statistiche da implementare).
+    g.  [x] Memorizzare statistiche aggregate per ogni candidato (es. vittorie, sconfitte, voti ricevuti).
+    h.  [x] Aggiornare i dati del candidato nel DB al termine di ogni elezione/round rilevante (Budget e statistiche aggregate ora aggiornati).
