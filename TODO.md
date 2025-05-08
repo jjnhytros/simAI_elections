@@ -68,3 +68,13 @@
 8.  **IA e LLM (Obiettivi a Lungo Termine dal Documento PDF):**
     * [ ] Agenti Potenziati da LLM.
     * [ ] Approccio Ibrido LLM/Regole.
+
+9.  **Database SQLite (Persistenza Candidati):**
+    * [P] Creare un database SQLite.
+    * [P] Ogni candidato generato avrà un UUID univoco.
+    * [P] Memorizzare tratti e valori degli attributi base per ogni candidato.
+    * [P] Memorizzare il budget iniziale della campagna.
+    * [ ] Se viene generato un candidato con un nome nel db, utilizzare quello già presente nel db (Caricamento base implementato in generazione).
+    * [ ] Memorizzare e aggiornare il budget rimanente della campagna.
+    * [ ] Memorizzare statistiche aggregate per ogni candidato (es. vittorie, sconfitte, voti ricevuti).
+    * [ ] Aggiornare i dati del candidato nel DB al termine di ogni elezione/round rilevante.

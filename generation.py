@@ -1,34 +1,43 @@
+# generation.py
 # In generation.py
 
 import random
 import math
-import networkx as nx  # <--- ASSICURATI CHE QUESTA RIGA SIA PRESENTE E NON COMMENTATA
+import networkx as nx
+import uuid  # Import the uuid module
+import json  # Import json for attributes/traits saving
 # Imports da altri moduli del progetto (modificati da relativi a assoluti)
 import config
 import data
+import db_manager  # Import the new db_manager
 
 # ... (funzione generate_attributes_by_age come prima) ...
 
 
 def generate_candidates(num_candidates, pool_male_first_names, pool_female_first_names, pool_surnames):
     """
-    Generates candidates with gender split, unique names, age, age-biased attributes, and party ID.
+    Generates candidates with gender split, unique names, age, age-biased attributes, party ID,
+    and interacts with the database for persistence and reuse.
     """
+    # Ensure database tables exist
+    db_manager.create_tables()
+
     candidates = []
+    # Still use this set for uniqueness WITHIN a single generation call
     used_full_names = set()
 
     num_males_target = num_candidates // 2
     num_females_target = num_candidates - num_males_target
     max_attempts_per_candidate = 1000
 
-    # Liste disponibili (copiate)
+    # Lists to draw from (copied)
     available_male_first_names = list(pool_male_first_names)
     available_female_first_names = list(pool_female_first_names)
     available_surnames = list(pool_surnames)
 
-    # Helper (come prima)
+    # Helper (as before)
     def generate_attributes_by_age(age):
-        # ... (logica attributi basati su età come prima) ...
+        # ... (logic for age-based attributes as before) ...
         min_age, max_age = config.CANDIDATE_AGE_RANGE
         min_attr, max_attr = config.ATTRIBUTE_RANGE
         age_range = max_age - min_age
@@ -54,101 +63,210 @@ def generate_candidates(num_candidates, pool_male_first_names, pool_female_first
         integrity = random.randint(min_attr, max_attr)
         return {"administrative_experience": experience, "social_vision": social_vision, "mediation_ability": mediation, "ethical_integrity": integrity}
 
-    # --- Genera Candidati Maschi ---
+    # --- Generate Male Candidates ---
     males_generated = 0
     random.shuffle(available_male_first_names)
     random.shuffle(available_surnames)
     while males_generated < num_males_target:
-        candidate_generated = False
+        candidate_data = None
         attempts = 0
-        while not candidate_generated and attempts < max_attempts_per_candidate:
+        while candidate_data is None and attempts < max_attempts_per_candidate:
             attempts += 1
             if not available_male_first_names or not available_surnames:
                 break
             first_name = random.choice(available_male_first_names)
             surname = random.choice(available_surnames)
             full_name = f"{first_name} {surname}"
-            if full_name not in used_full_names:
+
+            # --- Check Database ---
+            if db_manager.candidate_exists(full_name):
+                candidate_data = db_manager.get_candidate_by_name(full_name)
+                print(f"Loaded existing candidate: {full_name}")
+            elif full_name not in used_full_names:  # Only generate new if not in DB and not already generated this run
                 used_full_names.add(full_name)
                 age = random.randint(*config.CANDIDATE_AGE_RANGE)
                 attributes = generate_attributes_by_age(age)
-                # --- Assegna Party ID ---
                 party_id = random.choices(
                     config.PARTY_IDS, weights=config.PARTY_ID_ASSIGNMENT_WEIGHTS, k=1)[0]
-                # --- Fine Assegnazione ---
-                candidates.append({"name": full_name, "attributes": attributes,
-                                  "gender": "male", "age": age, "party_id": party_id})  # Aggiunto party_id
-                males_generated += 1
-                candidate_generated = True
-        if not candidate_generated:
+                # Assign initial budget when first generated
+                initial_budget = config.INITIAL_CAMPAIGN_BUDGET
+
+                candidate_data = {
+                    "uuid": str(uuid.uuid4()),  # Assign unique UUID
+                    "name": full_name,
+                    "attributes": attributes,
+                    "gender": "male",
+                    "age": age,
+                    "party_id": party_id,
+                    "initial_budget": initial_budget,
+                    "current_budget": initial_budget,  # Current budget starts as initial
+                    "traits": [],  # Traits can be added later or initialized here
+                    "stats": {}  # Stats initialized empty
+                }
+                # Save new candidate to DB
+                db_manager.save_candidate(candidate_data)
+                print(f"Generated and saved new candidate: {full_name}")
+
+        if candidate_data:
+            # Add candidate data to the list being returned, ensuring structure consistency
+            candidates.append({
+                "uuid": candidate_data.get("uuid"),
+                "name": candidate_data.get("name"),
+                "attributes": candidate_data.get("attributes", {}),
+                "gender": candidate_data.get("gender"),
+                "age": candidate_data.get("age"),
+                "party_id": candidate_data.get("party_id"),
+                # Load current budget
+                "campaign_budget": candidate_data.get("current_budget", config.INITIAL_CAMPAIGN_BUDGET),
+                "traits": candidate_data.get("traits", []),
+                "stats": candidate_data.get("stats", {})
+            })
+            males_generated += 1
+            # Ensure name is in set even if loaded from DB
+            used_full_names.add(candidate_data["name"])
+        else:
             print(
-                f"Warning: Max attempts reached for male {males_generated+1}.")
+                f"Warning: Max attempts reached for male {males_generated+1} name generation.")
             break
 
-    # --- Genera Candidate Femmine ---
+    # --- Generate Female Candidates ---
     females_generated = 0
     random.shuffle(available_female_first_names)
     random.shuffle(available_surnames)
     while females_generated < num_females_target:
-        candidate_generated = False
+        candidate_data = None
         attempts = 0
-        while not candidate_generated and attempts < max_attempts_per_candidate:
+        while candidate_data is None and attempts < max_attempts_per_candidate:
             attempts += 1
             if not available_female_first_names or not available_surnames:
                 break
             first_name = random.choice(available_female_first_names)
             surname = random.choice(available_surnames)
             full_name = f"{first_name} {surname}"
-            if full_name not in used_full_names:
+
+            # --- Check Database ---
+            if db_manager.candidate_exists(full_name):
+                candidate_data = db_manager.get_candidate_by_name(full_name)
+                print(f"Loaded existing candidate: {full_name}")
+            elif full_name not in used_full_names:  # Only generate new if not in DB and not already generated this run
                 used_full_names.add(full_name)
                 age = random.randint(*config.CANDIDATE_AGE_RANGE)
                 attributes = generate_attributes_by_age(age)
-                # --- Assegna Party ID ---
                 party_id = random.choices(
                     config.PARTY_IDS, weights=config.PARTY_ID_ASSIGNMENT_WEIGHTS, k=1)[0]
-                # --- Fine Assegnazione ---
-                candidates.append({"name": full_name, "attributes": attributes,
-                                  "gender": "female", "age": age, "party_id": party_id})  # Aggiunto party_id
-                females_generated += 1
-                candidate_generated = True
-        if not candidate_generated:
+                # Assign initial budget when first generated
+                initial_budget = config.INITIAL_CAMPAIGN_BUDGET
+
+                candidate_data = {
+                    "uuid": str(uuid.uuid4()),  # Assign unique UUID
+                    "name": full_name,
+                    "attributes": attributes,
+                    "gender": "female",
+                    "age": age,
+                    "party_id": party_id,
+                    "initial_budget": initial_budget,
+                    "current_budget": initial_budget,  # Current budget starts as initial
+                    "traits": [],  # Traits can be added later or initialized here
+                    "stats": {}  # Stats initialized empty
+                }
+                # Save new candidate to DB
+                db_manager.save_candidate(candidate_data)
+                print(f"Generated and saved new candidate: {full_name}")
+
+        if candidate_data:
+            # Add candidate data to the list being returned, ensuring structure consistency
+            candidates.append({
+                "uuid": candidate_data.get("uuid"),
+                "name": candidate_data.get("name"),
+                "attributes": candidate_data.get("attributes", {}),
+                "gender": candidate_data.get("gender"),
+                "age": candidate_data.get("age"),
+                "party_id": candidate_data.get("party_id"),
+                # Load current budget
+                "campaign_budget": candidate_data.get("current_budget", config.INITIAL_CAMPAIGN_BUDGET),
+                "traits": candidate_data.get("traits", []),
+                "stats": candidate_data.get("stats", {})
+            })
+            females_generated += 1
+            # Ensure name is in set even if loaded from DB
+            used_full_names.add(candidate_data["name"])
+        else:
             print(
-                f"Warning: Max attempts reached for female {females_generated+1}.")
+                f"Warning: Max attempts reached for female {females_generated+1} name generation.")
             break
 
-    # --- Fallback (come prima, ma aggiunge party_id) ---
-    num_generated = len(candidates)
-    num_missing = num_candidates - num_generated
+    # --- Fallback (as before, but interacts with DB) ---
+    num_generated_so_far = len(candidates)
+    num_missing = num_candidates - num_generated_so_far
     if num_missing > 0:
         print(f"Warning: Generating {num_missing} fallback candidates...")
         fallback_counter = 1
         while len(candidates) < num_candidates:
-            age = random.randint(*config.CANDIDATE_AGE_RANGE)
-            attributes = generate_attributes_by_age(age)
-            gender = random.choice(["male", "female"])
-            # --- Assegna Party ID Fallback ---
-            party_id = random.choices(
-                config.PARTY_IDS, weights=config.PARTY_ID_ASSIGNMENT_WEIGHTS, k=1)[0]
-            # --- Fine Assegnazione ---
-            # Genera nome fallback univoco (come prima)
-            full_name = f"Fallback Candidate {gender.capitalize()} {fallback_counter:03d}"
+            candidate_data = None
             attempts = 0
-            max_name_attempts = 10
-            while full_name in used_full_names and attempts < max_name_attempts:
-                full_name = f"Fallback Candidate {gender.capitalize()} {fallback_counter:03d}_{random.randint(100,999)}"
-                attempts += 1
-            if full_name in used_full_names:
-                full_name = f"Fallback Forced Unique {random.randint(10000, 99999)}"
-            used_full_names.add(full_name)
+            # Start with a name
+            full_name = f"Fallback Candidate {fallback_counter:03d}"
 
-            candidates.append({"name": full_name, "attributes": attributes,
-                              "gender": gender, "age": age, "party_id": party_id})  # Aggiunto party_id
-            fallback_counter += 1
-            if fallback_counter > num_missing * 2 and len(candidates) < num_candidates:
-                print(f"ERROR: Fallback loop stuck.")
+            while candidate_data is None and attempts < max_attempts_per_candidate:
+                attempts += 1
+                # --- Check Database ---
+                if db_manager.candidate_exists(full_name):
+                    candidate_data = db_manager.get_candidate_by_name(
+                        full_name)
+                    print(f"Loaded existing fallback candidate: {full_name}")
+                elif full_name not in used_full_names:  # Only generate new if not in DB and not already generated this run
+                    used_full_names.add(full_name)
+                    age = random.randint(*config.CANDIDATE_AGE_RANGE)
+                    attributes = generate_attributes_by_age(age)
+                    gender = random.choice(["male", "female"])
+                    party_id = random.choices(
+                        config.PARTY_IDS, weights=config.PARTY_ID_ASSIGNMENT_WEIGHTS, k=1)[0]
+                    initial_budget = config.INITIAL_CAMPAIGN_BUDGET
+
+                    candidate_data = {
+                        "uuid": str(uuid.uuid4()),  # Assign unique UUID
+                        "name": full_name,
+                        "attributes": attributes,
+                        "gender": gender,
+                        "age": age,
+                        "party_id": party_id,
+                        "initial_budget": initial_budget,
+                        "current_budget": initial_budget,
+                        "traits": [],
+                        "stats": {}
+                    }
+                    # Save new candidate to DB
+                    db_manager.save_candidate(candidate_data)
+                    print(
+                        f"Generated and saved new fallback candidate: {full_name}")
+
+                # If name exists or generated this run, try a different fallback name
+                    if candidate_data is None:
+                        fallback_counter += 1
+                        full_name = f"Fallback Candidate {fallback_counter:03d}"
+
+            if candidate_data:
+                # Add candidate data to the list being returned, ensuring structure consistency
+                candidates.append({
+                    "uuid": candidate_data.get("uuid"),
+                    "name": candidate_data.get("name"),
+                    "attributes": candidate_data.get("attributes", {}),
+                    "gender": candidate_data.get("gender"),
+                    "age": candidate_data.get("age"),
+                    "party_id": candidate_data.get("party_id"),
+                    # Load current budget
+                    "campaign_budget": candidate_data.get("current_budget", config.INITIAL_CAMPAIGN_BUDGET),
+                    "traits": candidate_data.get("traits", []),
+                    "stats": candidate_data.get("stats", {})
+                })
+                # Ensure name is in set even if loaded from DB
+                used_full_names.add(candidate_data["name"])
+                fallback_counter += 1  # Increment counter for next potential fallback
+            else:
+                print(f"ERROR: Fallback loop stuck for missing candidate.")
                 break  # Safety break
 
-    # --- Conclusione ---
+    # --- Conclusion ---
     random.shuffle(candidates)
     final_count = len(candidates)
     if final_count != num_candidates:
@@ -156,7 +274,7 @@ def generate_candidates(num_candidates, pool_male_first_names, pool_female_first
             f"ERROR: Final candidate count! Generated {final_count}, needed {num_candidates}.")
     else:
         print(
-            f"Generated {final_count}/{num_candidates} candidates successfully.")
+            f"Generated {final_count}/{num_candidates} candidates successfully (including {num_generated_so_far-num_missing} loaded from DB).")  # Adjusted log message
     return candidates
 
 
