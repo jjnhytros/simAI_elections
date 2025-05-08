@@ -1,25 +1,21 @@
+# election.py
 import random
 import math
 import time
 import copy
 from collections import Counter
 import sys
-import threading
-import networkx as nx
+import threading  # Non più usato direttamente qui per avviare la GUI
 import uuid
+import traceback  # Per logging errori più dettagliato
 
 # Imports da altri moduli del progetto (assoluti)
 import config
-import data  # Per accedere alle liste di nomi, etc.
+import data
 import utils
 import voting  # Contiene la maggior parte delle funzioni di simulazione specifiche
 import db_manager
 import generation  # Per generare candidati, elettori, rete
-
-# Le funzioni come generate_random_event, generate_candidate_oath
-# e le versioni precedenti di initialize_elector_preferences, simulate_ai_vote etc.
-# sono state spostate in voting.py o rifattorizzate.
-# Qui manteniamo solo ciò che è specifico per l'orchestrazione dell'elezione.
 
 
 def generate_candidate_oath(candidate_info, hot_topic=None):
@@ -73,10 +69,14 @@ def generate_candidate_oath(candidate_info, hot_topic=None):
         f"Focus su {p_soc}, con {p_exp}. Userò {p_med}, garantendo {p_itg}."
     ]
     oath = random.choice(structures)
-    hot = config.CURRENT_HOT_TOPIC
-    if hot and hot in attrs:  # Assicurati che hot sia una chiave valida per attrs
-        lvl = attrs.get(hot, 1)  # Default a 1 se hot non è in attrs
-        readable_hot = hot.replace('_', ' ').title()
+
+    # Usa config.CURRENT_HOT_TOPIC invece di un parametro hot_topic locale
+    # per coerenza, sebbene la funzione originale avesse un parametro.
+    # Qui assumiamo che config.CURRENT_HOT_TOPIC sia la fonte autorevole.
+    current_hot_topic_from_config = config.CURRENT_HOT_TOPIC
+    if current_hot_topic_from_config and current_hot_topic_from_config in attrs:
+        lvl = attrs.get(current_hot_topic_from_config, 1)
+        readable_hot = current_hot_topic_from_config.replace('_', ' ').title()
         if lvl >= 4:
             oath += f" Affronterò con decisione {readable_hot}."
         elif lvl <= 2 and random.random() < 0.5:
@@ -89,163 +89,240 @@ def generate_random_event(candidates_info,
                           last_round_results=None):
     """Genera evento casuale applicando Motivated Reasoning e Media Literacy."""
 
-    def apply_event_impact(elector_id, candidate_name, base_impact_value):
-        e_data = elector_full_preferences_data.get(elector_id)
-        if not e_data or candidate_name not in e_data.get('leanings', {}):
+    def apply_event_impact(elector_id, candidate_name_event,
+                           base_impact_value):
+        e_data_event = elector_full_preferences_data.get(elector_id)
+        if not e_data_event or candidate_name_event not in e_data_event.get(
+                'leanings', {}):
             return
-        impact = base_impact_value
-        traits = e_data.get('traits', [])
-        if "Motivated Reasoner" in traits:
-            lean = e_data['leanings'][candidate_name]
-            mid = config.MAX_ELECTOR_LEANING_BASE / 2.0
-            liked = lean > mid
-            pos_event = base_impact_value > 0
-            neg_event = base_impact_value < 0
-            incongruent = (neg_event and liked) or (pos_event and not liked)
-            if incongruent:
-                impact *= (1.0 - config.MOTIVATED_REASONING_FACTOR)
 
-        lit_score = e_data.get('media_literacy',
-                               config.MEDIA_LITERACY_RANGE[0])
-        min_l, max_l = config.MEDIA_LITERACY_RANGE
-        norm_lit = (lit_score - min_l) / (max_l - min_l) if (max_l -
-                                                             min_l) > 0 else 0
-        lit_reduc = norm_lit * config.MEDIA_LITERACY_EFFECT_FACTOR
-        final_impact = impact * (1.0 - lit_reduc)
+        impact_event = base_impact_value
+        traits_event = e_data_event.get('traits', [])
 
-        e_data['leanings'][candidate_name] = max(
-            0.1, e_data['leanings'][candidate_name] + final_impact)
+        # Motivated Reasoning
+        if "Motivated Reasoner" in traits_event:
+            lean_event = e_data_event['leanings'][candidate_name_event]
+            mid_point = config.MAX_ELECTOR_LEANING_BASE / 2.0
+            is_liked_event = lean_event > mid_point
+            is_positive_event = base_impact_value > 0
+            is_negative_event = base_impact_value < 0
 
-    if random.random() < 0.15:
+            is_incongruent_event = (is_negative_event and is_liked_event) or \
+                                   (is_positive_event and not is_liked_event)
+            if is_incongruent_event:
+                impact_event *= (1.0 - config.MOTIVATED_REASONING_FACTOR)
+
+        # Media Literacy
+        lit_score_event = e_data_event.get('media_literacy',
+                                           config.MEDIA_LITERACY_RANGE[0])
+        min_lit, max_lit = config.MEDIA_LITERACY_RANGE
+        norm_lit_event = (lit_score_event - min_lit) / (max_lit - min_lit) if (
+            max_lit - min_lit) > 0 else 0
+        lit_reduction_event = norm_lit_event * config.MEDIA_LITERACY_EFFECT_FACTOR
+        final_impact_event = impact_event * (1.0 - lit_reduction_event)
+
+        e_data_event['leanings'][candidate_name_event] = max(
+            0.1, e_data_event['leanings'][candidate_name_event] +
+            final_impact_event)
+
+    # Hot Topic & Event Selection
+    if random.random() < 0.15:  # Chance to change hot topic
         config.CURRENT_HOT_TOPIC = random.choice([
             "administrative_experience", "social_vision", "mediation_ability",
             "ethical_integrity"
         ])
-    elif random.random() < 0.05:
+    elif random.random() < 0.05:  # Chance to clear hot topic
         config.CURRENT_HOT_TOPIC = None
 
-    integrity_vals = [
-        c['attributes'].get('ethical_integrity', 1) for c in candidates_info
-        if 'attributes' in c
+    integrity_values = [
+        c_info['attributes'].get('ethical_integrity',
+                                 config.ATTRIBUTE_RANGE[0])
+        for c_info in candidates_info if 'attributes' in c_info
     ]
-    max_integ_diff = 0
-    if integrity_vals:
-        max_integ_diff = max(integrity_vals) - min(integrity_vals) if len(
-            integrity_vals) > 1 else 0
+    max_integrity_difference = 0
+    if integrity_values:  # Ensure list is not empty
+        max_integrity_difference = max(integrity_values) - min(
+            integrity_values) if len(integrity_values) > 1 else 0
 
-    event_types = {
+    event_type_definitions = {
         "scandal": {
             "base_prob":
             0.10,
             "state_factor":
-            max_integ_diff * config.EVENT_SCANDAL_PROB_FACTOR_INTEGRITY_DIFF
+            max_integrity_difference *
+            config.EVENT_SCANDAL_PROB_FACTOR_INTEGRITY_DIFF
         },
         "policy_focus": {
             "base_prob": 0.15,
             "state_factor": 0
-        },
+        },  # Focus on current hot topic or random attribute
         "public_opinion_shift": {
             "base_prob": 0.10,
             "state_factor": 0
-        },
+        },  # Shift towards/against an attribute
         "candidate_gaffe": {
             "base_prob": 0.12,
             "state_factor": 0
-        },
+        },  # Random candidate makes a mistake
         "candidate_success": {
             "base_prob": 0.12,
             "state_factor": 0
-        },
+        },  # Random candidate has a success moment
         "ethics_debate": {
             "base_prob":
             0.08,
             "state_factor":
-            max_integ_diff *
+            max_integrity_difference *
             config.EVENT_ETHICS_DEBATE_PROB_FACTOR_INTEGRITY_DIFF
         },
         "endorsement": {
             "base_prob": config.EVENT_ENDORSEMENT_BASE_PROB,
             "state_factor": 0
-        }
+        }  # Random candidate gets an endorsement
     }
-    choices = []
-    weights = []
-    for et, params in event_types.items():
-        prob = min(0.5,
-                   max(0, params["base_prob"] + params.get("state_factor", 0)))
-        if prob > 0:
-            choices.append(et)
-            weights.append(prob)
 
-    if not choices or not candidates_info:  # Aggiunto controllo candidates_info
+    event_choices = []
+    event_weights = []
+    for event_name, params in event_type_definitions.items():
+        # Probability influenced by base chance and current game state (e.g., integrity difference)
+        effective_prob = min(
+            0.5, max(0, params["base_prob"] + params.get("state_factor", 0)))
+        if effective_prob > 0:
+            event_choices.append(event_name)
+            event_weights.append(effective_prob)
+
+    if not event_choices or not candidates_info:
         utils.send_pygame_update(
             utils.UPDATE_TYPE_MESSAGE,
-            "Nessun evento casuale generabile o nessun candidato.")
+            "Nessun evento casuale generabile in questo round o nessun candidato."
+        )
         return
 
-    chosen_event = random.choices(choices, weights=weights, k=1)[0]
+    chosen_event_type = random.choices(event_choices,
+                                       weights=event_weights,
+                                       k=1)[0]
     utils.send_pygame_update(
         utils.UPDATE_TYPE_MESSAGE,
-        f"\n--- Evento Casuale: {chosen_event.replace('_',' ').title()} ---")
+        f"\n--- Evento Casuale: {chosen_event_type.replace('_',' ').title()} ---"
+    )
 
-    if chosen_event == "scandal":
-        scandalized_cand = min(
-            candidates_info,
-            key=lambda c: c.get('attributes', {}).get('ethical_integrity', 5))
-        scandalized_name = scandalized_cand['name']
-        scandal_impact_value = random.uniform(1.0, 3.0) * (
-            6 -
-            scandalized_cand.get('attributes', {}).get('ethical_integrity', 5))
-        if random.random() < 0.3:  # Chance it hits a random candidate instead
-            scandalized_name = random.choice(candidates_info)['name']
-            scandal_impact_value = random.uniform(1.0, 2.0)
+    # Apply Event Impact
+    if chosen_event_type == "scandal":
+        # Higher chance for low integrity candidate, but can be random
+        if random.random() < 0.7 and integrity_values:
+            target_candidate = min(
+                candidates_info,
+                key=lambda c: c.get('attributes', {}).get(
+                    'ethical_integrity', config.ATTRIBUTE_RANGE[1]))
+        else:
+            target_candidate = random.choice(candidates_info)
 
-        utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
-                                 f"  Scandalo su {scandalized_name}!")
-        base_neg_impact = -scandal_impact_value
-        for e_id in elector_full_preferences_data:
-            apply_event_impact(e_id, scandalized_name, base_neg_impact)
-
-    elif chosen_event == "policy_focus":
-        attr_focused = random.choice([
-            "administrative_experience", "social_vision", "mediation_ability",
-            "ethical_integrity"
-        ])
+        scandal_target_name = target_candidate['name']
+        # Impact inversely proportional to integrity, higher for lower integrity
+        scandal_base_impact = config.EVENT_SCANDAL_IMPACT * (
+            (config.ATTRIBUTE_RANGE[1] + 1) -
+            target_candidate.get('attributes', {}).get(
+                'ethical_integrity', config.ATTRIBUTE_RANGE[0]))
         utils.send_pygame_update(
             utils.UPDATE_TYPE_MESSAGE,
-            f"  Focus su {attr_focused.replace('_',' ').title()}!")
-        for e_id, e_data in elector_full_preferences_data.items():
-            if not e_data:
-                continue
-            e_ideal_pref = e_data.get(f'preference_{attr_focused}',
-                                      config.ELECTOR_IDEAL_PREFERENCE_RANGE[0])
-            for cand in candidates_info:
-                cand_attr_val = cand.get('attributes',
-                                         {}).get(attr_focused,
-                                                 config.ATTRIBUTE_RANGE[0])
-                distance = abs(cand_attr_val - e_ideal_pref)
-                max_dist = config.ELECTOR_IDEAL_PREFERENCE_RANGE[
-                    1] - config.ELECTOR_IDEAL_PREFERENCE_RANGE[0]
-                if max_dist == 0:
-                    max_dist = 1
-                norm_dist = distance / max_dist
-                base_impact = random.uniform(0.5,
-                                             1.5) * (1.0 - norm_dist * 1.5)
-                apply_event_impact(e_id, cand['name'], base_impact)
+            f"  Scandalo colpisce {scandal_target_name}!")
+        for elector_id_event in elector_full_preferences_data:
+            apply_event_impact(elector_id_event, scandal_target_name,
+                               -scandal_base_impact)  # Negative impact
 
-    # Aggiungere logica per altri tipi di eventi come "public_opinion_shift", "candidate_gaffe", etc.
-    # ... (implementazione simile per altri eventi) ...
-
-    else:  # Fallback per eventi non completamente implementati sopra
-        target_cand_name = random.choice(candidates_info)['name']
-        impact_sign = random.choice([-1, 1])
-        base_impact = impact_sign * random.uniform(0.5, 1.5)
+    elif chosen_event_type == "policy_focus":
+        focused_attribute = config.CURRENT_HOT_TOPIC if config.CURRENT_HOT_TOPIC else random.choice(
+            [
+                "administrative_experience", "social_vision",
+                "mediation_ability", "ethical_integrity"
+            ])
         utils.send_pygame_update(
             utils.UPDATE_TYPE_MESSAGE,
-            f"  Evento generico per {target_cand_name} (impatto: {base_impact:.2f})"
+            f"  Focus politico su: {focused_attribute.replace('_',' ').title()}!"
         )
-        for e_id in elector_full_preferences_data:
-            apply_event_impact(e_id, target_cand_name, base_impact)
+        for elector_id_event, e_data_event_focus in elector_full_preferences_data.items(
+        ):
+            elector_ideal_preference = e_data_event_focus.get(
+                f'preference_{focused_attribute}',
+                config.ELECTOR_IDEAL_PREFERENCE_RANGE[0])
+            for cand_info_event in candidates_info:
+                cand_attr_value = cand_info_event.get('attributes', {}).get(
+                    focused_attribute, config.ATTRIBUTE_RANGE[0])
+                distance_focus = abs(cand_attr_value -
+                                     elector_ideal_preference)
+                max_possible_dist = config.ELECTOR_IDEAL_PREFERENCE_RANGE[
+                    1] - config.ELECTOR_IDEAL_PREFERENCE_RANGE[0]
+                if max_possible_dist == 0:
+                    max_possible_dist = 1  # Avoid division by zero
+
+                # Higher impact if closer to ideal (normalized_distance is low)
+                normalized_distance = distance_focus / max_possible_dist
+                focus_impact = random.uniform(
+                    0.5, 1.5) * (1.0 - normalized_distance * 1.2
+                                 )  # Can be slightly negative if very far
+                apply_event_impact(elector_id_event, cand_info_event['name'],
+                                   focus_impact)
+
+    elif chosen_event_type == "candidate_gaffe":
+        gaffe_candidate = random.choice(candidates_info)
+        gaffe_impact_value = random.uniform(0.8, 2.0)  # Magnitude of gaffe
+        utils.send_pygame_update(
+            utils.UPDATE_TYPE_MESSAGE,
+            f"  Gaffe da parte di {gaffe_candidate['name']}!")
+        for elector_id_event in elector_full_preferences_data:
+            apply_event_impact(elector_id_event, gaffe_candidate['name'],
+                               -gaffe_impact_value)  # Negative impact
+
+    elif chosen_event_type == "candidate_success":
+        success_candidate = random.choice(candidates_info)
+        success_impact_value = random.uniform(0.8, 2.0)
+        utils.send_pygame_update(
+            utils.UPDATE_TYPE_MESSAGE,
+            f"  Momento di successo per {success_candidate['name']}!")
+        for elector_id_event in elector_full_preferences_data:
+            apply_event_impact(elector_id_event, success_candidate['name'],
+                               success_impact_value)  # Positive impact
+
+    elif chosen_event_type == "ethics_debate":
+        utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
+                                 "  Si accende un dibattito sull'etica!")
+        for elector_id_event in elector_full_preferences_data:
+            for cand_info_event in candidates_info:
+                cand_integrity_val = cand_info_event.get('attributes', {}).get(
+                    'ethical_integrity', config.ATTRIBUTE_RANGE[0])
+                # Impact proportional to integrity (positive for high, negative for low)
+                norm_integrity_val = (cand_integrity_val - config.ATTRIBUTE_RANGE[0]) / \
+                    (config.ATTRIBUTE_RANGE[1] - config.ATTRIBUTE_RANGE[0]) if \
+                    (config.ATTRIBUTE_RANGE[1] - config.ATTRIBUTE_RANGE[0]) > 0 else 0.5
+                ethics_impact = (
+                    norm_integrity_val - 0.5
+                ) * config.EVENT_ETHICS_DEBATE_IMPACT * 2  # Scale and center around 0
+                apply_event_impact(elector_id_event, cand_info_event['name'],
+                                   ethics_impact)
+
+    elif chosen_event_type == "endorsement":
+        endorsed_candidate = random.choice(candidates_info)
+        endorsement_impact_val = random.uniform(
+            *config.EVENT_ENDORSEMENT_IMPACT_RANGE)
+        utils.send_pygame_update(
+            utils.UPDATE_TYPE_MESSAGE,
+            f"  Un importante endorsement per {endorsed_candidate['name']}!")
+        for elector_id_event in elector_full_preferences_data:
+            apply_event_impact(elector_id_event, endorsed_candidate['name'],
+                               endorsement_impact_val)
+
+    # Fallback for any other defined but not fully implemented event type
+    else:
+        target_cand_fallback = random.choice(candidates_info)['name']
+        impact_sign_fallback = random.choice([-1, 1])
+        base_impact_fallback = impact_sign_fallback * random.uniform(0.3, 1.0)
+        utils.send_pygame_update(
+            utils.UPDATE_TYPE_MESSAGE,
+            f"  Evento generico ({chosen_event_type}) per {target_cand_fallback} (impatto: {base_impact_fallback:.2f})"
+        )
+        for elector_id_event in elector_full_preferences_data:
+            apply_event_impact(elector_id_event, target_cand_fallback,
+                               base_impact_fallback)
 
     utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE, "--------------------")
 
@@ -253,8 +330,21 @@ def generate_random_event(candidates_info,
 def run_election_simulation(election_attempt, preselected_candidates_info_gui,
                             runoff_carryover_winner_name, continue_event,
                             running_event, step_by_step_mode):
+    """
+    Orchestrates a single attempt of the governor election simulation.
+    """
     try:
-        running_event.set()  # Segnala alla GUI che la simulazione è partita
+        # Ensure global event is set if utils uses it
+        if running_event is None or utils.simulation_running_event is None:
+            if utils.simulation_running_event is None and running_event is not None:
+                utils.simulation_running_event = running_event
+            elif running_event is None and utils.simulation_running_event is not None:  # Should not happen if gui sets it
+                running_event = utils.simulation_running_event
+            else:  # Fallback if both are None
+                running_event = threading.Event()
+                utils.simulation_running_event = running_event
+
+        running_event.set()
         utils.send_pygame_update(
             utils.UPDATE_TYPE_STATUS, {
                 "attempt": election_attempt,
@@ -265,12 +355,12 @@ def run_election_simulation(election_attempt, preselected_candidates_info_gui,
         utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
                                  f"Attempt {election_attempt} starting...")
 
-        # 1. Inizializzazione
+        # 1. Inizializzazione Entità e Preferenze
         db_manager.create_tables()
 
         grand_electors_struct = generation.generate_grand_electors(
             config.NUM_GRAND_ELECTORS)
-        elector_ids = [e['id'] for e in grand_electors_struct]
+        elector_ids = [e_struct['id'] for e_struct in grand_electors_struct]
 
         social_network_graph = None
         if config.USE_SOCIAL_NETWORK:
@@ -278,15 +368,14 @@ def run_election_simulation(election_attempt, preselected_candidates_info_gui,
                 elector_ids)
 
         current_candidates_info = []
-        if preselected_candidates_info_gui:  # Dati passati dalla GUI
+        if preselected_candidates_info_gui:
             current_candidates_info = copy.deepcopy(
-                preselected_candidates_info_gui)  # Usa una copia
+                preselected_candidates_info_gui)
             utils.send_pygame_update(
                 utils.UPDATE_TYPE_MESSAGE,
                 f"Using {len(current_candidates_info)} preselected candidates for attempt {election_attempt}."
             )
         else:
-            # Usiamo questo come numero base di candidati per il governatore
             num_initial_candidates = config.CANDIDATES_PER_DISTRICT
             current_candidates_info = generation.generate_candidates(
                 num_initial_candidates, data.MALE_FIRST_NAMES,
@@ -300,55 +389,53 @@ def run_election_simulation(election_attempt, preselected_candidates_info_gui,
             utils.send_pygame_update(
                 utils.UPDATE_TYPE_ERROR,
                 "No candidates available to run the election.")
+            running_event.clear()
             return
 
-        # Inizializza/resetta temi e budget per i candidati all'inizio di un nuovo tentativo
-        for cand_info in current_candidates_info:
-            cand_info['campaign_budget'] = float(
-                cand_info.get('initial_budget', config.INITIAL_CAMPAIGN_BUDGET)
-            )  # Resetta al budget iniziale
-            db_manager.save_candidate(
-                cand_info
-            )  # Salva per assicurare che il budget sia aggiornato nel DB
-            if 'current_campaign_themes' not in cand_info or not cand_info[
+        for cand_info_init in current_candidates_info:
+            cand_info_init['campaign_budget'] = float(
+                cand_info_init.get('initial_budget',
+                                   config.INITIAL_CAMPAIGN_BUDGET))
+            db_manager.save_candidate(cand_info_init)
+            if 'current_campaign_themes' not in cand_info_init or not cand_info_init[
                     'current_campaign_themes']:
-                sorted_attrs = sorted(cand_info.get("attributes", {}).items(),
-                                      key=lambda i: i[1],
-                                      reverse=True)
-                cand_info['current_campaign_themes'] = [
-                    a[0] for a in sorted_attrs[:random.randint(1, 2)]
-                ] if sorted_attrs else ["social_vision"]
+                sorted_candidate_attrs = sorted(cand_info_init.get(
+                    "attributes", {}).items(),
+                    key=lambda item: item[1],
+                    reverse=True)
+                cand_info_init['current_campaign_themes'] = [
+                    attr_tuple[0] for attr_tuple in
+                    sorted_candidate_attrs[:random.randint(1, 2)]
+                ] if sorted_candidate_attrs else ["social_vision"]
 
         elector_preferences_data = voting.initialize_elector_preferences(
-            grand_electors_struct,
-            current_candidates_info,
-            # Questo serve per il boost iniziale se i candidati sono pre-selezionati
-            preselected_candidates_info_gui
-        )
+            grand_electors_struct, current_candidates_info,
+            preselected_candidates_info_gui)
 
-        governor_elected = None
+        governor_elected_name = None
         last_round_results_counter = Counter()
 
-        # 2. Ciclo Principale dell'Elezione
-        for current_round in range(config.MAX_TOTAL_ROUNDS):
+        # 2. Ciclo Principale dell'Elezione (Round)
+        for current_round_num in range(config.MAX_TOTAL_ROUNDS):
             if not running_event.is_set():
                 utils.send_pygame_update(
                     utils.UPDATE_TYPE_MESSAGE,
-                    "Simulation stopped by user request.")
+                    "Simulation stopped by user request during round.")
                 break
 
+            round_display_num = current_round_num + 1
             utils.send_pygame_update(
                 utils.UPDATE_TYPE_STATUS, {
                     "phase": "Governor Election",
-                    "round": current_round + 1,
+                    "round": round_display_num,
                     "status": "Adapting Strategies..."
                 })
-            for cand_info in current_candidates_info:
+            for cand_info_strat in current_candidates_info:
                 if not running_event.is_set():
                     break
                 voting.analyze_competition_and_adapt_strategy(
-                    cand_info, current_candidates_info,
-                    last_round_results_counter, current_round)
+                    cand_info_strat, current_candidates_info,
+                    last_round_results_counter, round_display_num)
             if not running_event.is_set():
                 break
 
@@ -362,15 +449,16 @@ def run_election_simulation(election_attempt, preselected_candidates_info_gui,
                 break
 
             utils.send_pygame_update(utils.UPDATE_TYPE_STATUS,
-                                     {"status": "Random Events..."})
+                                     {"status": "Processing Random Events..."})
             generate_random_event(current_candidates_info,
                                   elector_preferences_data,
                                   last_round_results_counter)
             if not running_event.is_set():
                 break
 
-            utils.send_pygame_update(utils.UPDATE_TYPE_STATUS,
-                                     {"status": "Social Influence..."})
+            utils.send_pygame_update(
+                utils.UPDATE_TYPE_STATUS,
+                {"status": "Simulating Social Influence..."})
             if config.USE_SOCIAL_NETWORK and social_network_graph:
                 elector_preferences_data = voting.simulate_social_influence(
                     social_network_graph, elector_preferences_data)
@@ -378,103 +466,119 @@ def run_election_simulation(election_attempt, preselected_candidates_info_gui,
                 break
 
             utils.send_pygame_update(utils.UPDATE_TYPE_STATUS,
-                                     {"status": "Voting..."})
-            round_votes = []
-            for elector_struct in grand_electors_struct:
+                                     {"status": "Electors Voting..."})
+            current_round_votes_list = []
+            for elector_struct_vote in grand_electors_struct:
                 if not running_event.is_set():
                     break
-                e_id = elector_struct['id']
-                e_data = elector_preferences_data.get(e_id)
-                if e_data:
-                    vote = voting.simulate_ai_vote(e_id,
-                                                   current_candidates_info,
-                                                   e_data,
-                                                   last_round_results_counter,
-                                                   current_round,
-                                                   current_candidates_info)
-                    if vote:
-                        round_votes.append(vote)
+                elector_id_vote = elector_struct_vote['id']
+                elector_data_vote = elector_preferences_data.get(
+                    elector_id_vote)
+                if elector_data_vote:
+                    vote_cast = voting.simulate_ai_vote(
+                        elector_id_vote, current_candidates_info,
+                        elector_data_vote, last_round_results_counter,
+                        round_display_num, current_candidates_info)
+                    if vote_cast:
+                        current_round_votes_list.append(vote_cast)
             if not running_event.is_set():
                 break
 
-            current_results_counter = voting.count_votes(round_votes)
-            last_round_results_counter = current_results_counter
+            current_results_counter = voting.count_votes(
+                current_round_votes_list)
 
-            candidate_details_map = {
+            # Identifica e invia gli elettori chiave
+            if elector_preferences_data and current_results_counter:
+                key_electors_list_data = voting.identify_key_electors(
+                    elector_preferences_data,
+                    current_results_counter,
+                    num_top_candidates_to_consider=3)
+                if key_electors_list_data:
+                    utils.send_pygame_update(utils.UPDATE_TYPE_KEY_ELECTORS,
+                                             key_electors_list_data)
+
+            last_round_results_counter = current_results_counter  # Per il prossimo round
+
+            # Prepara risultati per GUI
+            candidate_details_map_gui = {
                 c['name']: c
                 for c in current_candidates_info
             }
-            formatted_results_for_gui = []
-            for name, num_votes in current_results_counter.most_common():
-                details = candidate_details_map.get(name, {})
-                formatted_results_for_gui.append({
+            formatted_results_for_gui_display = []
+            for name_res, num_votes_res in current_results_counter.most_common(
+            ):
+                details_res = candidate_details_map_gui.get(name_res, {})
+                formatted_results_for_gui_display.append({
                     "name":
-                    name,
+                    name_res,
                     "votes":
-                    num_votes,
+                    num_votes_res,
                     "gender":
-                    details.get('gender', 'N/A'),
+                    details_res.get('gender', 'N/A'),
                     "party_id":
-                    details.get('party_id', 'N/A'),
+                    details_res.get('party_id', 'N/A'),
                     "attributes":
-                    details.get('attributes', {}),
+                    details_res.get('attributes', {}),
                     "age":
-                    details.get('age', 'N/A'),
+                    details_res.get('age', 'N/A'),
                     "elected_this_round":
-                    False
+                    False  # Sarà aggiornato da verify_election
                 })
-            utils.send_pygame_update(utils.UPDATE_TYPE_RESULTS,
-                                     {"results": formatted_results_for_gui})
+            utils.send_pygame_update(
+                utils.UPDATE_TYPE_RESULTS,
+                {"results": formatted_results_for_gui_display})
             utils.send_pygame_update(
                 utils.UPDATE_TYPE_MESSAGE,
-                f"Round {current_round + 1} results: {current_results_counter.most_common(5)}"
+                f"Round {round_display_num} results: {current_results_counter.most_common(5)}"
             )
 
-            majority_threshold = config.REQUIRED_MAJORITY
-            # Tentativi 3, 4, 5, 6 (se MAX_ATTEMPTS è 6)
+            # Verifica Elezione
+            current_majority_threshold = config.REQUIRED_MAJORITY
             if election_attempt >= 3:
-                majority_threshold = config.REQUIRED_MAJORITY_ATTEMPT_4  # Soglia ridotta
+                current_majority_threshold = config.REQUIRED_MAJORITY_ATTEMPT_4
 
-            governor_elected, votes_needed, _ = voting.verify_election(
+            governor_elected_name, votes_needed_win, _ = voting.verify_election(
                 current_results_counter, config.NUM_GRAND_ELECTORS,
-                majority_threshold)
+                current_majority_threshold)
 
-            if governor_elected:
+            if governor_elected_name:
                 utils.send_pygame_update(
                     utils.UPDATE_TYPE_MESSAGE,
-                    f"GOVERNOR {governor_elected} ELECTED in round {current_round + 1} (Attempt {election_attempt})!"
+                    f"GOVERNOR {governor_elected_name.upper()} ELECTED in round {round_display_num} (Attempt {election_attempt})!"
                 )
                 utils.send_pygame_update(utils.UPDATE_TYPE_COMPLETE, {
                     "elected": True,
-                    "governor": governor_elected
+                    "governor": governor_elected_name
                 })
-                # Qui potresti aggiornare le stats dei candidati nel DB
-                break
+                # TODO: Aggiornare statistiche candidati nel DB (vittorie, etc.)
+                break  # Esce dal ciclo dei round
 
-            if current_round + 1 >= config.MAX_NORMAL_ROUNDS and not governor_elected:
+            if round_display_num >= config.MAX_NORMAL_ROUNDS and not governor_elected_name:
                 utils.send_pygame_update(
                     utils.UPDATE_TYPE_MESSAGE,
-                    f"Max normal rounds ({config.MAX_NORMAL_ROUNDS}) reached for attempt {election_attempt}."
+                    f"Max normal rounds ({config.MAX_NORMAL_ROUNDS}) reached for attempt {election_attempt}. No winner yet."
                 )
-                # Implementa logica di spareggio o eliminazione candidati se necessario
-                # Per ora, si continua fino a MAX_TOTAL_ROUNDS o elezione
+                # Qui potrebbe esserci logica per runoff o eliminazione candidati, se implementata.
+                # Altrimenti, la simulazione continua fino a MAX_TOTAL_ROUNDS.
 
+            # Gestione Modalità Step-by-Step
             if step_by_step_mode:
                 utils.send_pygame_update(utils.UPDATE_TYPE_STATUS,
                                          {"status": "Waiting for Next Round"})
                 continue_event.clear()
                 if not running_event.is_set():
                     break
-                continue_event.wait()
+                continue_event.wait()  # Attende segnale dalla GUI
                 if not running_event.is_set():
                     break
-            else:
+            else:  # Modalità continua
                 if not running_event.is_set():
                     break
                 time.sleep(config.GOVERNOR_PAUSE_SECONDS)
 
-        # 3. Fine Simulazione per questo tentativo
-        if not governor_elected and running_event.is_set():
+        # 3. Fine Simulazione per questo tentativo (dopo il ciclo dei round)
+        if not governor_elected_name and running_event.is_set(
+        ):  # Se il ciclo è terminato senza un eletto e non per stop utente
             utils.send_pygame_update(
                 utils.UPDATE_TYPE_MESSAGE,
                 f"Attempt {election_attempt}: No governor elected after {config.MAX_TOTAL_ROUNDS} rounds. Deadlock."
@@ -484,25 +588,27 @@ def run_election_simulation(election_attempt, preselected_candidates_info_gui,
                 "governor": None,
                 "reason": "Deadlock"
             })
-        elif not running_event.is_set() and not governor_elected:
+        elif not running_event.is_set(
+        ) and not governor_elected_name:  # Se fermato dall'utente prima di eleggere
             utils.send_pygame_update(
                 utils.UPDATE_TYPE_MESSAGE,
-                "Simulation stopped by user before completion.")
+                "Simulation stopped by user before a governor was elected.")
             utils.send_pygame_update(utils.UPDATE_TYPE_STATUS,
                                      {"status": "Stopped by user"})
 
-    except Exception as e:
-        import traceback
-        error_message = f"Critical error in simulation (Attempt {election_attempt}): {str(e)}\n{traceback.format_exc()}"
-        utils.send_pygame_update(utils.UPDATE_TYPE_ERROR, error_message)
-        print(error_message)
+    except Exception as e_sim:
+        tb_str = traceback.format_exc()
+        error_message_sim = f"Critical error in simulation (Attempt {election_attempt}): {str(e_sim)}\n{tb_str}"
+        utils.send_pygame_update(utils.UPDATE_TYPE_ERROR, error_message_sim)
+        print(error_message_sim)  # Stampa anche sulla console per debug
     finally:
         utils.send_pygame_update(
             utils.UPDATE_TYPE_MESSAGE,
-            f"Simulation attempt {election_attempt} thread cycle ended.")
-        running_event.clear()  # Assicura che running_event sia clear alla fine
+            f"Simulation attempt {election_attempt} thread cycle finished.")
+        if running_event:  # Assicurati che running_event esista prima di chiamare clear
+            running_event.clear()
 
 
-# Rimosso il blocco if __name__ == "__main__" che avviava la GUI da qui.
-# election.py ora è un modulo che fornisce la logica di simulazione.
-# L'avvio dell'applicazione avverrà da gui.py.
+# Il blocco if __name__ == "__main__": è stato rimosso da election.py
+# per renderlo un modulo la cui logica è chiamata da gui.py (che ora è l'entry point).
+# Per testare election.py separatamente, si potrebbe aggiungere un blocco main specifico per test.
