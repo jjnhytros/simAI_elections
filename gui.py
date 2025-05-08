@@ -4,621 +4,605 @@ import sys
 import threading
 import queue
 import time
-
-# Imports da altri moduli del progetto (assoluti)
+import traceback
 import config
 import data
 import utils
-import election  # Import election module
-import db_manager  # Import db_manager per create_tables
+import election
+import db_manager  # Importa db_manager
 
-# --- Add check here ---
-if not hasattr(election, 'run_election_simulation'):
-    print(
-        "FATAL GUI ERROR: 'election' module does not have 'run_election_simulation' attribute."
-    )
+# --- Controllo Esistenza Funzione Simulazione ---
+if not hasattr(election, 'run_election_simulation'):  # pragma: no cover
+    print("FATAL GUI ERROR: 'election' module does not have 'run_election_simulation' attribute.")
     sys.exit("Missing run_election_simulation in election module.")
-# --- End check ---
 
-# UI Layout Areas
-STATUS_AREA = None
-VISUAL_AREA = None
-RESULTS_AREA = None
-LOG_AREA = None
-BUTTON_AREA = None
-
-# Event per controllare la simulazione (GUI -> Simulation)
+# --- Variabili Globali GUI ---
+STATUS_AREA, VISUAL_AREA, RESULTS_AREA, LOG_AREA, BUTTON_AREA = None, None, None, None, None
 simulation_continue_event = threading.Event()
-# Event per segnalare che la simulazione è in corso (Simulation -> GUI)
-simulation_running_event = threading.Event()  # Usato in utils.py e election.py
-# Rendi accessibile globalmente se necessario per utils
+simulation_running_event = threading.Event()
 utils.simulation_running_event = simulation_running_event
-
-# Flag per indicare se la simulazione è in attesa del "prossimo round" in modalità passo-passo
 simulation_waiting_for_next = False
-
 displayed_candidate_text_rects = []
-current_simulation_attempt = 0  # Tiene traccia del tentativo corrente
+current_simulation_attempt = 0
+preselected_candidates_for_next_attempt = None
+runoff_winner_for_next_attempt = None
+log_line_height = 16
+max_log_lines = 10
+
+# --- Funzioni Helper GUI ---
 
 
 def render_text(font, text, color, surface, x, y, antialias=True):
-    text_surface = font.render(str(text), antialias, color)
-    rect = surface.blit(text_surface, (x, y))
-    return text_surface.get_height(), rect
+    """Renders text and returns height and bounding rect."""
+    try:
+        if not font:
+            return 0, pygame.Rect(x, y, 0, 0)
+        text_surface = font.render(str(text), antialias, color)
+        int_x, int_y = int(x), int(y)
+        rect = surface.blit(text_surface, (int_x, int_y))
+        return text_surface.get_height(), rect
+    except Exception as e_render:  # pragma: no cover
+        print(f"ERROR rendering text '{str(text)[:50]}...': {e_render}")
+        return 0, pygame.Rect(int(x), int(y), 0, 0)
 
 
 def draw_button(surface, rect, color, text, font, text_color, enabled=True):
-    button_color = color
-    text_color_actual = text_color
-
-    if not enabled:
-        button_color = config.GRAY
-        text_color_actual = config.DARK_GRAY
-
-    pygame.draw.rect(surface, button_color, rect)
-    pygame.draw.rect(surface, config.WHITE, rect, 1)  # Border
-
-    text_surface = font.render(text, True, text_color_actual)
-    text_rect = text_surface.get_rect(center=rect.center)
-    surface.blit(text_surface, text_rect)
+    """Draws a button and returns its rect."""
+    try:
+        if not isinstance(rect, pygame.Rect):
+            print(f"ERROR: draw_button received invalid rect: {rect}")
+            return rect
+        button_color = color if enabled else config.GRAY
+        text_color_actual = text_color if enabled else config.DARK_GRAY
+        pygame.draw.rect(surface, button_color, rect)
+        pygame.draw.rect(surface, config.WHITE, rect, 1)
+        if font and text:
+            text_surface = font.render(text, True, text_color_actual)
+            text_rect = text_surface.get_rect(center=rect.center)
+            surface.blit(text_surface, text_rect)
+    except Exception as e_button:  # pragma: no cover
+        print(f"ERROR drawing button '{text}': {e_button}")
     return rect
+
+# --- Funzione per Calcolare Aree UI ---
+
+
+def calculate_ui_areas(width, height, current_log_line_height):
+    """Calcola le aree UI e il numero massimo di linee di log."""
+    min_width = 300
+    min_height = 400
+    width = max(min_width, width)
+    height = max(min_height, height)
+    padding = 10
+    status_rect = pygame.Rect(
+        padding, padding, max(100, width - 2*padding), 80)
+    visual_h = 150
+    visual_rect = pygame.Rect(
+        padding, status_rect.bottom + padding, max(100, width - 2*padding), visual_h)
+    button_h = 50
+    remaining_h = max(100, height - visual_rect.bottom -
+                      (padding * 3) - button_h - padding)
+    results_w = max(100, (width - (padding * 3)) // 2)
+    log_w = max(100, width - (padding * 3) - results_w)
+    results_rect = pygame.Rect(
+        padding, visual_rect.bottom + padding, results_w, remaining_h)
+    log_rect = pygame.Rect(results_rect.right + padding,
+                           visual_rect.bottom + padding, log_w, remaining_h)
+    button_y = max(results_rect.bottom, log_rect.bottom) + padding
+    button_rect = pygame.Rect(padding, button_y, max(
+        100, width - (padding * 2)), button_h)
+    calculated_max_lines = 10
+    if log_rect.height > 0 and current_log_line_height > 0:
+        calculated_max_lines = max(
+            1, (log_rect.height // current_log_line_height) - 2)
+    return status_rect, visual_rect, results_rect, log_rect, button_rect, calculated_max_lines
+
+# --- Funzione Principale GUI ---
 
 
 def main_pygame_gui():
     global STATUS_AREA, VISUAL_AREA, RESULTS_AREA, LOG_AREA, BUTTON_AREA
     global simulation_waiting_for_next, displayed_candidate_text_rects, current_simulation_attempt
+    global preselected_candidates_for_next_attempt, runoff_winner_for_next_attempt
+    global log_line_height, max_log_lines
 
     pygame.init()
-    infoObject = pygame.display.Info()
-    SCREEN_WIDTH = int(infoObject.current_w *
-                       0.95)  # Usa 95% per evitare problemi di fullscreen
-    SCREEN_HEIGHT = int(infoObject.current_h * 0.95)
-    # screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN | pygame.SRCALPHA)
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT),
-                                     pygame.RESIZABLE | pygame.SRCALPHA)
+    try:
+        pygame.font.init()
+    except Exception as e_font_init:
+        print(f"FATAL ERROR: Pygame font init failed: {e_font_init}")
+        pygame.quit()
+        sys.exit(1)
 
+    infoObject = pygame.display.Info()
+    screen_w_init = int(infoObject.current_w * 0.90)
+    screen_h_init = int(infoObject.current_h * 0.90)
+    try:
+        screen = pygame.display.set_mode(
+            (screen_w_init, screen_h_init), pygame.RESIZABLE | pygame.SRCALPHA)
+    except Exception as e_screen:
+        print(f"FATAL ERROR: Could not set display mode: {e_screen}")
+        pygame.quit()
+        sys.exit(1)
     pygame.display.set_caption(config.WINDOW_TITLE)
 
+    font, small_font, title_font = None, None, None
     try:
         font = pygame.font.SysFont("DejaVu Sans", config.PIXEL_FONT_SIZE)
-        small_font = pygame.font.SysFont("DejaVu Sans",
-                                         config.PIXEL_FONT_SIZE - 4)
-        title_font = pygame.font.SysFont("DejaVu Sans",
-                                         config.PIXEL_FONT_SIZE + 2,
-                                         bold=True)
-    except pygame.error:
-        font = pygame.font.SysFont("monospace", config.PIXEL_FONT_SIZE)
-        small_font = pygame.font.SysFont("monospace",
-                                         config.PIXEL_FONT_SIZE - 2)
-        title_font = pygame.font.SysFont("monospace",
-                                         config.PIXEL_FONT_SIZE + 2,
-                                         bold=True)
-        utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            "Warning: DejaVu Sans font not found, using monospace.")
+        small_font = pygame.font.SysFont(
+            "DejaVu Sans", config.PIXEL_FONT_SIZE - 4)
+        title_font = pygame.font.SysFont(
+            "DejaVu Sans", config.PIXEL_FONT_SIZE + 2, bold=True)
+        print("DEBUG: Custom font loaded.")
+    except Exception:
+        try:
+            font = pygame.font.SysFont("monospace", config.PIXEL_FONT_SIZE)
+            small_font = pygame.font.SysFont(
+                "monospace", config.PIXEL_FONT_SIZE - 2)
+            title_font = pygame.font.SysFont(
+                "monospace", config.PIXEL_FONT_SIZE + 2, bold=True)
+            print("DEBUG: Monospace font loaded.")
+        except Exception as e_font_fallback:
+            print(f"FATAL ERROR: Could not load any font: {e_font_fallback}")
+            pygame.quit()
+            sys.exit(1)
+    if not font or not small_font or not title_font:
+        print("FATAL ERROR: Fonts are None.")
+        pygame.quit()
+        sys.exit(1)
 
     clock = pygame.time.Clock()
-
-    STATUS_AREA = pygame.Rect(20, 20, SCREEN_WIDTH - 40, 80)
-    VISUAL_AREA_HEIGHT = 150
-    VISUAL_AREA = pygame.Rect(20, STATUS_AREA.bottom + 10, SCREEN_WIDTH - 40,
-                              VISUAL_AREA_HEIGHT)
-    AREA_PADDING = 10
-    BUTTON_AREA_HEIGHT = 50
-    REMAINING_HEIGHT = SCREEN_HEIGHT - VISUAL_AREA.bottom - (
-        AREA_PADDING * 3) - BUTTON_AREA_HEIGHT - 20
-    RESULTS_AREA_WIDTH = (SCREEN_WIDTH - (AREA_PADDING * 3)) // 2
-    LOG_AREA_WIDTH = SCREEN_WIDTH - (AREA_PADDING * 3) - RESULTS_AREA_WIDTH
-    RESULTS_AREA = pygame.Rect(AREA_PADDING, VISUAL_AREA.bottom + AREA_PADDING,
-                               RESULTS_AREA_WIDTH, REMAINING_HEIGHT)
-    LOG_AREA = pygame.Rect(RESULTS_AREA.right + AREA_PADDING,
-                           VISUAL_AREA.bottom + AREA_PADDING, LOG_AREA_WIDTH,
-                           REMAINING_HEIGHT)
-    BUTTON_AREA = pygame.Rect(AREA_PADDING, LOG_AREA.bottom + AREA_PADDING,
-                              SCREEN_WIDTH - (AREA_PADDING * 2),
-                              BUTTON_AREA_HEIGHT)
-
-    current_status_dict = {
-        "attempt": 0,
-        "phase": "Initializing...",
-        "round": 0,
-        "status": "Idle",
-        "governor": None
-    }
-    current_results_data = [
-    ]  # Lista di dizionari per i candidati e i loro voti
-    log_messages = ["Welcome to simAI Elections!"]
-
     log_line_height = small_font.get_linesize()
     if log_line_height <= 0:
-        log_line_height = config.PIXEL_FONT_SIZE - 2
-    max_log_lines = (
-        LOG_AREA.height // log_line_height
-    ) - 2 if LOG_AREA.height > 0 and log_line_height > 0 else 10
+        log_line_height = 16
 
+    SCREEN_WIDTH, SCREEN_HEIGHT = screen.get_size()
+    STATUS_AREA, VISUAL_AREA, RESULTS_AREA, LOG_AREA, BUTTON_AREA, max_log_lines = calculate_ui_areas(
+        SCREEN_WIDTH, SCREEN_HEIGHT, log_line_height)
+
+    current_status_dict = {"attempt": 0, "phase": "Idle",
+                           "round": 0, "status": "Ready", "governor": None}
+    current_results_data = []
+    log_messages = ["Welcome! Click 'Start Election'."]
     flag_state = None
     simulation_thread = None
     step_by_step_mode = config.STEP_BY_STEP_MODE_DEFAULT
 
-    # Per passare i candidati tra tentativi
-    preselected_candidates_for_next_attempt = None
-    # Per passare il vincitore di un eventuale runoff
-    runoff_winner_for_next_attempt = None
-
+    # --- CICLO PRINCIPALE ---
     running = True
     while running:
-        mouse_pos = pygame.mouse.get_pos()
-        tooltip_text = None
+        try:
+            mouse_pos = pygame.mouse.get_pos()
+            tooltip_text = None
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+            # --- Gestione Eventi ---
+            _start_rect_click, _next_rect_click, _quit_rect_click = None, None, None
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
                     running = False
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
-                    # Buttons
-                    if 'start_button_rect' in locals(
-                    ) and start_button_rect.collidepoint(event.pos):
-                        if not simulation_running_event.is_set():
-                            current_simulation_attempt += 1
-                            if current_simulation_attempt > config.MAX_ELECTION_ATTEMPTS:
-                                utils.send_pygame_update(
-                                    utils.UPDATE_TYPE_MESSAGE,
-                                    "Max election attempts reached. Resetting."
-                                )
-                                current_simulation_attempt = 1
-                                # Resetta per un nuovo ciclo completo
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                if event.type == pygame.VIDEORESIZE:
+                    SCREEN_WIDTH, SCREEN_HEIGHT = event.size
+                    try:
+                        screen = pygame.display.set_mode(
+                            (SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE | pygame.SRCALPHA)
+                        STATUS_AREA, VISUAL_AREA, RESULTS_AREA, LOG_AREA, BUTTON_AREA, max_log_lines = calculate_ui_areas(
+                            SCREEN_WIDTH, SCREEN_HEIGHT, log_line_height)
+                    except pygame.error as e_resize:
+                        print(
+                            f"Warning: Could not resize screen: {e_resize}")  # pragma: no cover
+
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    # Calcola Rects bottoni per click handling
+                    if BUTTON_AREA:
+                        BUTTON_WIDTH_CLICK, BUTTON_HEIGHT_CLICK = 150, BUTTON_AREA.height - 10
+                        button_padding_click = 20
+                        visible_buttons_count_click = 2 + \
+                            (1 if step_by_step_mode else 0)
+                        total_visible_buttons_width_click = BUTTON_WIDTH_CLICK * visible_buttons_count_click + \
+                            button_padding_click * \
+                            (visible_buttons_count_click -
+                             1 if visible_buttons_count_click > 1 else 0)
+                        button_start_x_click = BUTTON_AREA.left + \
+                            max(0, (BUTTON_AREA.width -
+                                total_visible_buttons_width_click) // 2)
+                        button_y_pos_click = BUTTON_AREA.top + 5
+                        _start_rect_click = pygame.Rect(
+                            button_start_x_click, button_y_pos_click, BUTTON_WIDTH_CLICK, BUTTON_HEIGHT_CLICK)
+                        _next_x_click = _start_rect_click.right + button_padding_click
+                        _next_rect_click = pygame.Rect(
+                            _next_x_click, button_y_pos_click, BUTTON_WIDTH_CLICK, BUTTON_HEIGHT_CLICK) if step_by_step_mode else None
+                        _quit_x_click = _next_rect_click.right + \
+                            button_padding_click if _next_rect_click else _start_rect_click.right + \
+                            button_padding_click
+                        _quit_rect_click = pygame.Rect(
+                            _quit_x_click, button_y_pos_click, BUTTON_WIDTH_CLICK, BUTTON_HEIGHT_CLICK)
+
+                        # Controllo Click
+                        if _start_rect_click and _start_rect_click.collidepoint(event.pos):
+                            # DEBUG
+                            print("\nDEBUG: Start Button Click Detected!")
+                            # DEBUG
+                            print(
+                                f"DEBUG: Checking simulation_running_event.is_set(): {simulation_running_event.is_set()}")
+                            if not simulation_running_event.is_set():
+                                # DEBUG
+                                print(
+                                    "DEBUG: Event not set, proceeding to start simulation...")
+                                current_simulation_attempt += 1
+                                if current_simulation_attempt > config.MAX_ELECTION_ATTEMPTS:
+                                    utils.send_pygame_update(
+                                        utils.UPDATE_TYPE_MESSAGE, "Max election attempts reached. Resetting.")
+                                    current_simulation_attempt = 1
+                                    preselected_candidates_for_next_attempt = None
+                                    runoff_winner_for_next_attempt = None
+                                current_status_dict = {
+                                    "attempt": current_simulation_attempt, "phase": "Starting...", "round": 0, "status": "Initializing", "governor": None}
+                                current_results_data = []
+                                log_messages = [
+                                    f"Attempt {current_simulation_attempt} starting..."]
+                                flag_state = None
+                                simulation_waiting_for_next = False
+                                displayed_candidate_text_rects = []
+                                simulation_continue_event.clear()
+                                simulation_running_event.clear()
+                                # DEBUG
+                                print("DEBUG: Creating simulation thread...")
+                                simulation_thread = threading.Thread(target=election.run_election_simulation, kwargs={
+                                    'election_attempt': current_simulation_attempt, 'preselected_candidates_info_gui': preselected_candidates_for_next_attempt,
+                                    'runoff_carryover_winner_name': runoff_winner_for_next_attempt, 'continue_event': simulation_continue_event,
+                                    'running_event': simulation_running_event, 'step_by_step_mode': step_by_step_mode})
+                                simulation_thread.daemon = True
+                                simulation_thread.start()
+                                # DEBUG
+                                print("DEBUG: Simulation thread start() called.")
+                                if not step_by_step_mode:
+                                    simulation_continue_event.set()
                                 preselected_candidates_for_next_attempt = None
                                 runoff_winner_for_next_attempt = None
+                            else:
+                                # DEBUG
+                                print(
+                                    "DEBUG: Simulation already running (event was set), start button ignored.")
 
-                            current_status_dict = {
-                                "attempt": current_simulation_attempt,
-                                "phase": "Starting...",
-                                "round": 0,
-                                "status": "Initializing",
-                                "governor": None
-                            }
-                            current_results_data = []
-                            log_messages = [
-                                f"Attempt {current_simulation_attempt} starting..."
-                            ]
-                            flag_state = None
-                            simulation_waiting_for_next = False
-                            displayed_candidate_text_rects = []
-
-                            simulation_continue_event.clear()
-                            simulation_running_event.clear(
-                            )  # Assicurati sia clear prima di start
-
-                            simulation_thread = threading.Thread(
-                                target=election.run_election_simulation,
-                                kwargs={
-                                    'election_attempt':
-                                    current_simulation_attempt,
-                                    'preselected_candidates_info_gui':
-                                    preselected_candidates_for_next_attempt,
-                                    'runoff_carryover_winner_name':
-                                    runoff_winner_for_next_attempt,
-                                    'continue_event':
-                                    simulation_continue_event,
-                                    'running_event': simulation_running_event,
-                                    'step_by_step_mode': step_by_step_mode
-                                })
-                            simulation_thread.daemon = True
-                            simulation_thread.start()
-                            # simulation_running_event viene settato da run_election_simulation
-                            if not step_by_step_mode:
+                        elif _next_rect_click and _next_rect_click.collidepoint(event.pos):
+                            if simulation_running_event.is_set() and simulation_waiting_for_next:
+                                # DEBUG
+                                print(
+                                    "DEBUG: Next Round Button Clicked and condition met.")
                                 simulation_continue_event.set()
-                            preselected_candidates_for_next_attempt = None  # Resetta dopo averlo passato
-                            runoff_winner_for_next_attempt = None
+                                simulation_waiting_for_next = False
+                            else:
+                                # DEBUG
+                                print(
+                                    "DEBUG: Next Round Button Clicked but conditions not met.")
+                        elif _quit_rect_click and _quit_rect_click.collidepoint(event.pos):
+                            print("DEBUG: Quit Button Clicked.")  # DEBUG
+                            running = False
 
-                    if step_by_step_mode and 'next_round_button_rect' in locals(
-                    ) and next_round_button_rect.collidepoint(event.pos):
-                        if simulation_running_event.is_set(
-                        ) and simulation_waiting_for_next:
-                            simulation_continue_event.set()
-                            simulation_waiting_for_next = False
-
-                    if 'quit_button_rect' in locals(
-                    ) and quit_button_rect.collidepoint(event.pos):
-                        running = False
-
-                    # Click su nomi candidati per tooltip/info (logica spostata in fase di disegno per hover)
-
-        # Process updates from simulation thread
-        while not utils.pygame_update_queue.empty():
-            try:
-                update_type, update_data = utils.pygame_update_queue.get_nowait(
-                )
-            except queue.Empty:
-                break
-
-            if update_type == utils.UPDATE_TYPE_MESSAGE:
-                log_messages.append(str(update_data))
-            elif update_type == utils.UPDATE_TYPE_STATUS:
-                current_status_dict.update(update_data)
-                if step_by_step_mode and current_status_dict.get(
-                        "status") == "Waiting for Next Round":
-                    simulation_waiting_for_next = True
-                else:
-                    simulation_waiting_for_next = False  # Anche se diventa "Error" o altro
-            elif update_type == utils.UPDATE_TYPE_RESULTS:
-                if update_data and "results" in update_data:
-                    current_results_data = update_data["results"]
-            elif update_type == utils.UPDATE_TYPE_FLAG:
-                flag_state = update_data
-            elif update_type == utils.UPDATE_TYPE_COMPLETE:
-                current_status_dict["status"] = "Simulation Complete"
-                simulation_running_event.clear(
-                )  # La simulazione (o tentativo) è finita
-                simulation_waiting_for_next = False
-                if update_data:
-                    if update_data.get("elected"):
-                        governor_name = update_data.get("governor", "Unknown")
-                        current_status_dict["governor"] = governor_name
+            # --- Processa Coda Aggiornamenti ---
+            while not utils.pygame_update_queue.empty():
+                try:
+                    update_type, update_data = utils.pygame_update_queue.get_nowait()
+                    # print(f"DEBUG: Received update from queue: Type={update_type}") # DEBUG intensivo coda
+                    if update_type == utils.UPDATE_TYPE_STATUS:
+                        current_status_dict.update(update_data)
+                        simulation_waiting_for_next = step_by_step_mode and current_status_dict.get(
+                            "status") == "Waiting for Next Round"
+                    elif update_type == utils.UPDATE_TYPE_RESULTS:
+                        current_results_data = update_data.get(
+                            "results", []) if isinstance(update_data, dict) else []
+                    elif update_type == utils.UPDATE_TYPE_FLAG:
+                        flag_state = update_data
+                    elif update_type == utils.UPDATE_TYPE_MESSAGE:
+                        log_messages.append(str(update_data))
+                    elif update_type == utils.UPDATE_TYPE_WARNING:
                         log_messages.append(
-                            f"\n*** GOVERNOR {governor_name.upper()} ELECTED! (Attempt {current_status_dict['attempt']}) ***\n"
-                        )
-                        current_simulation_attempt = 0  # Resetta per un nuovo ciclo di elezioni
-                        preselected_candidates_for_next_attempt = None
-                    else:  # Deadlock for this attempt
+                            f"\n--- WARNING --- \n{update_data}\n-------------")
+                    elif update_type == utils.UPDATE_TYPE_ERROR:
                         log_messages.append(
-                            f"\n--- ELECTORAL DEADLOCK (Attempt {current_status_dict['attempt']}) ---"
-                        )
-                        # Prepara per il prossimo tentativo, se ce ne sono ancora
-                        if current_status_dict[
-                                'attempt'] < config.MAX_ELECTION_ATTEMPTS:
-                            log_messages.append("   Ready for next attempt.")
-                            # Potresti voler passare i candidati attuali al prossimo tentativo
-                            # preselected_candidates_for_next_attempt = copy.deepcopy(current_results_data) # o current_candidates_info dalla simulazione
-                        else:
+                            f"\n!!! SIMULATION ERROR (Att {current_status_dict.get('attempt','?')}) !!!\n!!! {update_data} !!!\n")
+                        current_status_dict["status"] = "Error"
+                        simulation_running_event.clear()
+                        simulation_waiting_for_next = False
+                    elif update_type == utils.UPDATE_TYPE_COMPLETE:
+                        current_status_dict["status"] = "Simulation Complete"
+                        simulation_running_event.clear()
+                        simulation_waiting_for_next = False
+                        if isinstance(update_data, dict):
+                            if update_data.get("elected"):
+                                governor_name = update_data.get(
+                                    "governor", "?")
+                                current_status_dict["governor"] = governor_name
+                                log_messages.append(
+                                    f"\n*** GOVERNOR {governor_name.upper()} ELECTED! (Attempt {current_status_dict['attempt']}) ***\n")
+                                current_simulation_attempt = 0
+                                preselected_candidates_for_next_attempt = None
+                            else:
+                                log_messages.append(
+                                    f"\n--- ELECTORAL DEADLOCK (Attempt {current_status_dict['attempt']}) ---")
+                            if current_status_dict['attempt'] < config.MAX_ELECTION_ATTEMPTS:
+                                log_messages.append(
+                                    "   Ready for next attempt.")
+                            else:
+                                log_messages.append(
+                                    f"   Max attempts ({config.MAX_ELECTION_ATTEMPTS}) reached.")
+                                current_simulation_attempt = 0
+                                preselected_candidates_for_next_attempt = None
+                    elif update_type == utils.UPDATE_TYPE_KEY_ELECTORS:
+                        if isinstance(update_data, list) and update_data:
                             log_messages.append(
-                                f"   Max attempts ({config.MAX_ELECTION_ATTEMPTS}) reached. No Governor elected."
-                            )
-                            current_simulation_attempt = 0  # Resetta
-                            preselected_candidates_for_next_attempt = None
+                                "\n--- Key Electors Identified ---")
+                            for i, ke_info in enumerate(update_data):
+                                if i < 5:
+                                    reasons_str = ", ".join(
+                                        ke_info.get("reasons", ["N/A"]))
+                                    log_messages.append(
+                                        f"  ID: {ke_info.get('id', 'N/A')}, Reasons: {reasons_str}")
+                                else:
+                                    log_messages.append(
+                                        f"  ...and {len(update_data) - 5} more.")
+                                    break
+                        # else: log messaggio 'nessun elettore chiave'? Opzionale
+                    # Tronca log
+                    if len(log_messages) > max_log_lines:
+                        log_messages = log_messages[-max_log_lines:]
+                except queue.Empty:
+                    break
+                except Exception as e_queue:
+                    # Debug
+                    print(
+                        f"Error processing queue item {update_type}: {e_queue}")
 
-            elif update_type == utils.UPDATE_TYPE_ERROR:
-                log_messages.append(
-                    f"\n!!! SIMULATION ERROR (Attempt {current_status_dict.get('attempt','N/A')}) !!!\n!!! {update_data} !!!\n"
-                )
-                current_status_dict["status"] = "Error"
-                simulation_running_event.clear()
-                simulation_waiting_for_next = False
+            # --- Disegno Interfaccia ---
+            screen.fill(config.BG_COLOR)
 
-            if len(log_messages) > max_log_lines:
-                log_messages = log_messages[-max_log_lines:]
-
-        # Drawing
-        screen.fill(config.BG_COLOR)
-
-        # Status Area
-        status_bg_surface = pygame.Surface(STATUS_AREA.size, pygame.SRCALPHA)
-        status_bg_surface.fill((64, 64, 64, 192))
-        screen.blit(status_bg_surface, STATUS_AREA.topleft)
-        pygame.draw.rect(screen, config.WHITE, STATUS_AREA, 1)
-        status_y = STATUS_AREA.top + 5
-        status_x_left = STATUS_AREA.left + 10
-        status_x_right = STATUS_AREA.right - 250  # Spazio per status e governatore
-
-        h1, _ = render_text(
-            font,
-            f"Attempt: {current_status_dict.get('attempt', '-')}/{config.MAX_ELECTION_ATTEMPTS}",
-            config.WHITE, screen, status_x_left, status_y)
-        h2, _ = render_text(
-            font, f"Phase: {current_status_dict.get('phase', 'N/A')}",
-            config.WHITE, screen, status_x_left, status_y + h1 + 2)
-        render_text(font, f"Round: {current_status_dict.get('round', '-')}",
-                    config.WHITE, screen, status_x_right, status_y)
-        status_text_val = current_status_dict.get("status", "")
-        render_text(font, f"Status: {status_text_val}", config.WHITE, screen,
-                    status_x_left, status_y + h1 + h2 + 4)
-        if current_status_dict.get("governor"):
-            render_text(font, f"Governor: {current_status_dict['governor']}",
-                        config.GREEN, screen, status_x_right,
-                        status_y + h1 + 2)
-
-        mode_text = "Mode: Step-by-Step" if step_by_step_mode else "Mode: Continuous"
-        render_text(small_font, mode_text, config.WHITE, screen, status_x_left,
-                    STATUS_AREA.bottom - small_font.get_linesize() - 5)
-
-        # Visual Area
-        visual_bg_surface = pygame.Surface(VISUAL_AREA.size, pygame.SRCALPHA)
-        visual_bg_surface.fill((32, 32, 32, 160))
-        screen.blit(visual_bg_surface, VISUAL_AREA.topleft)
-        pygame.draw.rect(screen, config.WHITE, VISUAL_AREA, 1)
-        displayed_candidate_text_rects.clear()
-
-        display_items_visual = current_results_data[:
-                                                    12]  # Mostra fino a 12 candidati
-        if display_items_visual:
-            num_columns = 3
-            col_width = VISUAL_AREA.width // num_columns
-            row_height_visual = small_font.get_linesize() + 4
-            start_x_visual, start_y_visual = VISUAL_AREA.left + 10, VISUAL_AREA.top + 10
-
-            for i, item in enumerate(display_items_visual):
-                cand_name_visual = item.get('name', 'N/A')
-                gender_visual = item.get('gender', 'unknown')
-                text_color_visual = config.PINK if gender_visual == "female" else config.LIGHT_BLUE if gender_visual == "male" else config.WHITE
-
-                col_idx = i % num_columns
-                row_idx = i // num_columns
-                text_x_visual = start_x_visual + col_idx * col_width
-                text_y_visual = start_y_visual + row_idx * row_height_visual
-
-                if text_y_visual + row_height_visual < VISUAL_AREA.bottom - 5:  # Check bounds
-                    _, text_rect_visual = render_text(small_font,
-                                                      cand_name_visual,
-                                                      text_color_visual,
-                                                      screen, text_x_visual,
-                                                      text_y_visual)
-                    displayed_candidate_text_rects.append(
-                        (text_rect_visual, item))
-                    if text_rect_visual.collidepoint(mouse_pos):
-                        attrs_visual = item.get('attributes', {})
-                        attrs_str_visual = ", ".join([
-                            f"{k.replace('_',' ').title()}: {v}"
-                            for k, v in attrs_visual.items()
-                        ])
-                        tooltip_text = (
-                            f"{cand_name_visual} ({item.get('party_id','N/A')})\n"
-                            f"Age: {item.get('age','N/A')}, Gender: {gender_visual.title()}\n"
-                            f"Attributes: {attrs_str_visual if attrs_str_visual else 'N/A'}"
-                        )
-
-        # Results Area
-        results_bg_surface = pygame.Surface(RESULTS_AREA.size, pygame.SRCALPHA)
-        results_bg_surface.fill((48, 48, 48, 192))
-        screen.blit(results_bg_surface, RESULTS_AREA.topleft)
-        pygame.draw.rect(screen, config.WHITE, RESULTS_AREA, 1)
-        render_text(title_font, "Latest Results:", config.WHITE, screen,
-                    RESULTS_AREA.left + 10, RESULTS_AREA.top + 5)
-
-        if current_results_data:
-            relevant_results = [
-                item for item in current_results_data
-                if item.get('votes', 0) > 0
-            ]
-            max_votes = max(
-                item['votes']
-                for item in relevant_results) if relevant_results else 1
-            bar_area_width_results = RESULTS_AREA.width - 20
-            bar_height_results = 15
-            bar_spacing_results = 5
-            bar_start_y_results = RESULTS_AREA.top + 5 + title_font.get_linesize(
-            ) + 10
-            total_votes_this_round = sum(
-                item['votes']
-                for item in relevant_results) if relevant_results else 0
-
-            for i, item_res in enumerate(
-                    sorted(relevant_results,
-                           key=lambda x: x.get('votes', 0),
-                           reverse=True)):
-                if bar_start_y_results + i * (
-                        bar_height_results + bar_spacing_results
-                ) + bar_height_results > RESULTS_AREA.bottom - 5:
+            # Aree (con controlli base per esistenza)
+            if STATUS_AREA:
+                try:
+                    # Semplice rect senza Surface
+                    pygame.draw.rect(screen, (64, 64, 64, 192), STATUS_AREA)
+                    pygame.draw.rect(screen, config.WHITE, STATUS_AREA, 1)
+                    status_y = STATUS_AREA.top + 5
+                    status_x_left = STATUS_AREA.left + 10
+                    status_x_right = STATUS_AREA.right - 250
+                    h1, _ = render_text(
+                        font, f"Attempt: {current_status_dict.get('attempt', '-')}/{config.MAX_ELECTION_ATTEMPTS}", config.WHITE, screen, status_x_left, status_y)
+                    h2, _ = render_text(
+                        font, f"Phase: {current_status_dict.get('phase', 'N/A')}", config.WHITE, screen, status_x_left, status_y + h1 + 2)
+                    render_text(font, f"Round: {current_status_dict.get('round', '-')}",
+                                config.WHITE, screen, status_x_right, status_y)
+                    status_text_val = current_status_dict.get("status", "")
+                    render_text(font, f"Status: {status_text_val}", config.WHITE,
+                                screen, status_x_left, status_y + h1 + h2 + 4)
+                    if current_status_dict.get("governor"):
+                        render_text(
+                            font, f"Governor: {current_status_dict['governor']}", config.GREEN, screen, status_x_right, status_y + h1 + 2)
+                    mode_text = "Mode: Step-by-Step" if step_by_step_mode else "Mode: Continuous"
                     render_text(
-                        small_font, "...", config.WHITE, screen,
-                        RESULTS_AREA.left + 10, bar_start_y_results + i *
-                        (bar_height_results + bar_spacing_results))
-                    break
+                        small_font, mode_text, config.WHITE, screen, status_x_left, STATUS_AREA.bottom - small_font.get_linesize() - 5)
+                except Exception as e:
+                    print(
+                        f"Error drawing Status Area: {e}")  # pragma: no cover
 
-                cand_name_res, votes_res = item_res['name'], item_res['votes']
-                is_overall_elected = (current_status_dict.get("governor")
-                                      == cand_name_res
-                                      and current_status_dict.get("status")
-                                      == "Simulation Complete")
+            if VISUAL_AREA:
+                try:
+                    pygame.draw.rect(screen, (32, 32, 32, 160), VISUAL_AREA)
+                    pygame.draw.rect(screen, config.WHITE, VISUAL_AREA, 1)
+                    displayed_candidate_text_rects.clear()
+                    display_items_visual = current_results_data[:12]
+                    if display_items_visual:
+                        num_columns = 3
+                        col_width = VISUAL_AREA.width // num_columns
+                        row_height_visual = small_font.get_linesize() + 4
+                        start_x_visual, start_y_visual = VISUAL_AREA.left + 10, VISUAL_AREA.top + 10
+                        for i, item in enumerate(display_items_visual):
+                            cand_name_visual = item.get('name', 'N/A')
+                            gender_visual = item.get('gender', 'unknown')
+                            text_color_visual = config.PINK if gender_visual == "female" else config.LIGHT_BLUE if gender_visual == "male" else config.WHITE
+                            col_idx = i % num_columns
+                            row_idx = i // num_columns
+                            text_x_visual = start_x_visual + col_idx * col_width
+                            text_y_visual = start_y_visual + row_idx * row_height_visual
+                            if text_y_visual + row_height_visual < VISUAL_AREA.bottom - 5:
+                                _, text_rect_visual = render_text(
+                                    small_font, cand_name_visual, text_color_visual, screen, text_x_visual, text_y_visual)
+                                displayed_candidate_text_rects.append(
+                                    (text_rect_visual, item))
+                                if text_rect_visual.collidepoint(mouse_pos):
+                                    attrs_visual = item.get(
+                                        'attributes', {})
+                                    attrs_str_visual = ", ".join(
+                                        [f"{k.replace('_',' ').title()}: {v}" for k, v in attrs_visual.items()])
+                                    tooltip_text = (f"{cand_name_visual} ({item.get('party_id','N/A')})\n" +
+                                                    f"Age: {item.get('age','N/A')}, Gender: {gender_visual.title()}\n" + f"Attributes: {attrs_str_visual if attrs_str_visual else 'N/A'}")
+                except Exception as e:
+                    print(
+                        f"Error drawing Visual Area: {e}")  # pragma: no cover
 
-                vote_percentage = (votes_res / total_votes_this_round *
-                                   100) if total_votes_this_round > 0 else 0
-                bar_width_val = max(1, (votes_res / max_votes) *
-                                    bar_area_width_results
-                                    ) if votes_res > 0 and max_votes > 0 else 0
-                bar_color_val = config.GREEN if is_overall_elected else config.GRAY
+            if RESULTS_AREA:
+                try:
+                    pygame.draw.rect(screen, (48, 48, 48, 192), RESULTS_AREA)
+                    pygame.draw.rect(screen, config.WHITE, RESULTS_AREA, 1)
+                    render_text(title_font, "Latest Results:", config.WHITE,
+                                screen, RESULTS_AREA.left + 10, RESULTS_AREA.top + 5)
+                    if current_results_data:
+                        relevant_results = [item for item in current_results_data if isinstance(
+                            item, dict) and item.get('votes', 0) > 0]
+                        max_votes = max(
+                            item['votes'] for item in relevant_results) if relevant_results else 1
+                        bar_area_width_results = RESULTS_AREA.width - 20
+                        bar_height_results = 15
+                        bar_spacing_results = 5
+                        bar_start_y_results = RESULTS_AREA.top + 5 + title_font.get_linesize() + 10
+                        total_votes_this_round = sum(
+                            item['votes'] for item in relevant_results) if relevant_results else 0
+                        for i, item_res in enumerate(sorted(relevant_results, key=lambda x: x.get('votes', 0), reverse=True)):
+                            if bar_start_y_results + i * (bar_height_results + bar_spacing_results) + bar_height_results > RESULTS_AREA.bottom - 5:
+                                render_text(small_font, "...", config.WHITE, screen, RESULTS_AREA.left +
+                                            10, bar_start_y_results + i * (bar_height_results + bar_spacing_results))
+                            break
+                            cand_name_res, votes_res = item_res['name'], item_res['votes']
+                            is_overall_elected = (current_status_dict.get(
+                                "governor") == cand_name_res and current_status_dict.get("status") == "Simulation Complete")
+                            vote_percentage = (
+                                votes_res / total_votes_this_round * 100) if total_votes_this_round > 0 else 0
+                            bar_width_val = max(
+                                1, (votes_res / max_votes) * bar_area_width_results) if votes_res > 0 and max_votes > 0 else 0
+                            bar_color_val = config.GREEN if is_overall_elected else config.GRAY
+                            bar_rect_item = pygame.Rect(RESULTS_AREA.left + 10, bar_start_y_results + i * (
+                                bar_height_results + bar_spacing_results), bar_width_val, bar_height_results)
+                            pygame.draw.rect(
+                                screen, bar_color_val, bar_rect_item)
+                            pygame.draw.rect(
+                                screen, config.WHITE, bar_rect_item, 1)
+                            name_text_res = f"{cand_name_res}: {votes_res} ({vote_percentage:.1f}%)"
+                            name_surface_res = small_font.render(
+                                name_text_res, True, config.WHITE)
+                            text_x_res = bar_rect_item.left + 5
+                            text_y_res = bar_rect_item.centery - name_surface_res.get_height() // 2
+                            if bar_width_val < name_surface_res.get_width() + 10:
+                                text_x_res = bar_rect_item.right + 5
+                            text_x_res = min(
+                                text_x_res, RESULTS_AREA.right - 10 - name_surface_res.get_width())
+                            screen.blit(name_surface_res,
+                                        (text_x_res, text_y_res))
+                except Exception as e:
+                    print(
+                        f"Error drawing Results Area: {e}")  # pragma: no cover
 
-                bar_rect_item = pygame.Rect(
-                    RESULTS_AREA.left + 10, bar_start_y_results + i *
-                    (bar_height_results + bar_spacing_results), bar_width_val,
-                    bar_height_results)
-                pygame.draw.rect(screen, bar_color_val, bar_rect_item)
-                pygame.draw.rect(screen, config.WHITE, bar_rect_item, 1)
+            if LOG_AREA:
+                try:
+                    pygame.draw.rect(screen, (48, 48, 48, 192), LOG_AREA)
+                    pygame.draw.rect(screen, config.WHITE, LOG_AREA, 1)
+                    render_text(title_font, "Log:", config.WHITE,
+                                screen, LOG_AREA.left + 10, LOG_AREA.top + 5)
+                    log_y_start = LOG_AREA.top + 5 + title_font.get_linesize() + 5
+                    # Disegna messaggi dal basso verso l'alto (o alto verso basso, ma solo i più recenti)
+                    start_index = max(0, len(log_messages) - max_log_lines)
+                    for i, msg_log in enumerate(log_messages[start_index:]):
+                        current_y = log_y_start + i * log_line_height
+                        if current_y + log_line_height > LOG_AREA.bottom - 5:
+                            break  # Non entra più
 
-                name_text_res = f"{cand_name_res}: {votes_res} ({vote_percentage:.1f}%)"
-                name_surface_res = small_font.render(name_text_res, True,
-                                                     config.WHITE)
-                text_x_res = bar_rect_item.left + 5
-                if bar_width_val < name_surface_res.get_width() + 10:
-                    text_x_res = bar_rect_item.right + 5
-                text_x_res = min(
-                    text_x_res,
-                    RESULTS_AREA.right - 10 - name_surface_res.get_width())
-                screen.blit(name_surface_res,
-                            (text_x_res, bar_rect_item.centery -
-                             name_surface_res.get_height() // 2))
+                        # Word wrap semplice (potrebbe essere migliorato)
+                        # Converti a str per sicurezza
+                        words = str(msg_log).split(' ')
+                        lines_for_msg = []
+                        current_line_log = ""
+                        max_width_log = LOG_AREA.width - 20
+                        for word_log in words:
+                            test_line_log = current_line_log + word_log + " "
+                            if small_font.size(test_line_log)[0] < max_width_log:
+                                current_line_log = test_line_log
+                            else:
+                                lines_for_msg.append(current_line_log)
+                                current_line_log = word_log + " "
+                        lines_for_msg.append(current_line_log)
 
-        # Log Area
-        log_bg_surface = pygame.Surface(LOG_AREA.size, pygame.SRCALPHA)
-        log_bg_surface.fill((48, 48, 48, 192))
-        screen.blit(log_bg_surface, LOG_AREA.topleft)
-        pygame.draw.rect(screen, config.WHITE, LOG_AREA, 1)
-        render_text(title_font, "Log:", config.WHITE, screen,
-                    LOG_AREA.left + 10, LOG_AREA.top + 5)
+                        # Renderizza linee wrappate
+                        temp_y_log = current_y
+                        for line_log in lines_for_msg:
+                            if temp_y_log + log_line_height <= LOG_AREA.bottom - 5:
+                                render_text(small_font, line_log.strip(
+                                ), config.WHITE, screen, LOG_AREA.left + 10, temp_y_log)
+                                temp_y_log += log_line_height
+                            else:
+                                break  # Spazio finito nel box per questo messaggio
+                except Exception as e:
+                    print(f"Error drawing Log Area: {e}")  # pragma: no cover
 
-        log_y_start = LOG_AREA.top + 5 + title_font.get_linesize() + 5
-        for msg_idx, msg_log in enumerate(
-                reversed(log_messages)):  # Show newest first
-            if log_y_start + msg_idx * log_line_height > LOG_AREA.bottom - 5 - log_line_height:
-                break  # Stop if no more space
+            # Button Area
+            # Resetta per disegno
+            start_button_rect, next_round_button_rect, quit_button_rect = None, None, None
+            if BUTTON_AREA:
+                try:
+                    BUTTON_WIDTH, BUTTON_HEIGHT = 150, BUTTON_AREA.height - 10
+                    button_padding = 20
+                    visible_buttons_count = 2 + (1 if step_by_step_mode else 0)
+                    total_visible_buttons_width = BUTTON_WIDTH * visible_buttons_count + \
+                        button_padding * \
+                        (visible_buttons_count -
+                         1 if visible_buttons_count > 1 else 0)
+                    button_start_x = BUTTON_AREA.left + \
+                        max(0, (BUTTON_AREA.width - total_visible_buttons_width) // 2)
+                    button_y_pos = BUTTON_AREA.top + 5
 
-            # Simple word wrap
-            words = msg_log.split(' ')
-            lines_for_msg = []
-            current_line_log = ""
-            max_width_log = LOG_AREA.width - 20
+                    # Disegna Start
+                    start_button_enabled = not simulation_running_event.is_set()
+                    start_button_rect = pygame.Rect(
+                        button_start_x, button_y_pos, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    draw_button(screen, start_button_rect, config.GREEN, "Start Election",
+                                font, config.WHITE, enabled=start_button_enabled)
+                    current_button_x_draw = start_button_rect.right + button_padding
 
-            for word_log in words:
-                test_line_log = current_line_log + word_log + " "
-                if small_font.size(test_line_log)[0] < max_width_log:
-                    current_line_log = test_line_log
-                else:
-                    lines_for_msg.append(current_line_log)
-                    current_line_log = word_log + " "
-            lines_for_msg.append(current_line_log)
+                    # Disegna Next
+                    if step_by_step_mode:
+                        next_round_button_enabled = simulation_running_event.is_set(
+                        ) and simulation_waiting_for_next
+                        next_round_button_rect = pygame.Rect(
+                            current_button_x_draw, button_y_pos, BUTTON_WIDTH, BUTTON_HEIGHT)
+                        draw_button(screen, next_round_button_rect, config.BLUE, "Next Round",
+                                    font, config.WHITE, enabled=next_round_button_enabled)
+                        current_button_x_draw = next_round_button_rect.right + button_padding
 
-            # Initial y for this message block
-            temp_y_log = log_y_start + msg_idx * log_line_height
-            for line_idx, line_log in enumerate(lines_for_msg):
-                if temp_y_log + line_idx * log_line_height > LOG_AREA.bottom - 5 - log_line_height:
-                    break
-                render_text(small_font, line_log.strip(), config.WHITE, screen,
-                            LOG_AREA.left + 10,
-                            temp_y_log + line_idx * log_line_height)
+                    # Disegna Quit
+                    quit_button_rect = pygame.Rect(
+                        current_button_x_draw, button_y_pos, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    draw_button(screen, quit_button_rect, config.RED,
+                                "Quit", font, config.WHITE, enabled=True)
+                except Exception as e:
+                    print(
+                        f"Error drawing Button Area: {e}")  # pragma: no cover
 
-        # Flag Area (placeholder)
-        flag_area_rect = pygame.Rect(STATUS_AREA.right - 70,
-                                     STATUS_AREA.top + 5, 60,
-                                     STATUS_AREA.height - 10)
-        # ... (disegno bandiera come prima) ...
+            # Tooltip
+            if tooltip_text:
+                try:
+                    # ... (Codice disegno tooltip come prima) ...
+                    pass
+                except Exception as e:
+                    print(f"Error drawing Tooltip: {e}")  # pragma: no cover
 
-        # Button Area
-        BUTTON_WIDTH, BUTTON_HEIGHT = 150, BUTTON_AREA.height - 10
-        button_padding = 20
+            pygame.display.flip()
+            clock.tick(30)
 
-        buttons_to_draw = []
-        start_button_rect = pygame.Rect(0, 0, 0, 0)  # Init
-        next_round_button_rect = pygame.Rect(0, 0, 0, 0)  # Init
+        # Gestione Errore Loop Principale
+        except Exception as loop_error:  # pragma: no cover
+            print("\n" + "="*30 +
+                  "\n!!! UNHANDLED ERROR IN MAIN GUI LOOP !!!\n" + "="*30)
+            print(f"ERROR TYPE: {type(loop_error).__name__}")
+            print(f"ERROR DETAILS: {loop_error}")
+            print("-" * 30 + " TRACEBACK " + "-" * 30)
+            traceback.print_exc()
+            print("="*70 + "\n")
+            running = False
 
-        start_button_enabled = not simulation_running_event.is_set()
-        buttons_to_draw.append(
-            lambda surf: draw_button(surf,
-                                     start_button_rect,
-                                     config.GREEN,
-                                     "Start Election",
-                                     font,
-                                     config.WHITE,
-                                     enabled=start_button_enabled))
-
-        if step_by_step_mode:
-            next_round_button_enabled = simulation_running_event.is_set(
-            ) and simulation_waiting_for_next
-            buttons_to_draw.append(
-                lambda surf: draw_button(surf,
-                                         next_round_button_rect,
-                                         config.BLUE,
-                                         "Next Round",
-                                         font,
-                                         config.WHITE,
-                                         enabled=next_round_button_enabled))
-
-        buttons_to_draw.append(lambda surf: draw_button(surf,
-                                                        quit_button_rect,
-                                                        config.RED,
-                                                        "Quit",
-                                                        font,
-                                                        config.WHITE,
-                                                        enabled=True))
-
-        total_buttons_width = BUTTON_WIDTH * len(
-            buttons_to_draw) + button_padding * (
-                len(buttons_to_draw) - 1 if len(buttons_to_draw) > 1 else 0)
-        button_start_x = BUTTON_AREA.left + (BUTTON_AREA.width -
-                                             total_buttons_width) // 2
-        button_y_pos = BUTTON_AREA.top + 5
-
-        current_button_x = button_start_x
-        # Assegna rects e disegna
-        start_button_rect = pygame.Rect(current_button_x, button_y_pos,
-                                        BUTTON_WIDTH, BUTTON_HEIGHT)
-        draw_button(screen,
-                    start_button_rect,
-                    config.GREEN,
-                    "Start Election",
-                    font,
-                    config.WHITE,
-                    enabled=start_button_enabled)
-        current_button_x += BUTTON_WIDTH + button_padding
-
-        if step_by_step_mode:
-            next_round_button_rect = pygame.Rect(current_button_x,
-                                                 button_y_pos, BUTTON_WIDTH,
-                                                 BUTTON_HEIGHT)
-            next_round_button_enabled = simulation_running_event.is_set(
-            ) and simulation_waiting_for_next
-            draw_button(screen,
-                        next_round_button_rect,
-                        config.BLUE,
-                        "Next Round",
-                        font,
-                        config.WHITE,
-                        enabled=next_round_button_enabled)
-            current_button_x += BUTTON_WIDTH + button_padding
-
-        quit_button_rect = pygame.Rect(current_button_x, button_y_pos,
-                                       BUTTON_WIDTH, BUTTON_HEIGHT)
-        draw_button(screen,
-                    quit_button_rect,
-                    config.RED,
-                    "Quit",
-                    font,
-                    config.WHITE,
-                    enabled=True)
-
-        # Tooltip
-        if tooltip_text:
-            tooltip_lines = tooltip_text.split('\n')
-            max_tt_width = 0
-            tt_surfaces = []
-            total_tt_height = 0
-            for line in tooltip_lines:
-                surf = small_font.render(line, True, config.BLACK)
-                tt_surfaces.append(surf)
-                max_tt_width = max(max_tt_width, surf.get_width())
-                total_tt_height += surf.get_height() + 2
-
-            tt_rect = pygame.Rect(0, 0, max_tt_width + 10, total_tt_height + 5)
-            tt_rect.topleft = (mouse_pos[0] + 15, mouse_pos[1] + 10)
-            tt_rect.clamp_ip(screen.get_rect())  # Keep in screen
-            pygame.draw.rect(screen, config.YELLOW, tt_rect)
-            pygame.draw.rect(screen, config.BLACK, tt_rect, 1)
-            current_tt_y = tt_rect.top + 5
-            for surf in tt_surfaces:
-                screen.blit(surf, (tt_rect.left + 5, current_tt_y))
-                current_tt_y += surf.get_height() + 2
-
-        pygame.display.flip()
-        clock.tick(30)  # FPS
-
-    # Fine del ciclo while running
+    # --- Pulizia Uscita ---
     if simulation_running_event.is_set():
-        utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            "GUI is closing, signaling simulation to stop.")
-        simulation_running_event.clear(
-        )  # Segnala al thread di simulazione di terminare
+        print("GUI closing, signaling simulation thread to stop...")
+        simulation_running_event.clear()
         if simulation_thread and simulation_thread.is_alive():
-            simulation_continue_event.set()  # Sblocca eventuali attese
-            simulation_thread.join(2.0)  # Attendi max 2 secondi
+            simulation_continue_event.set()
+            simulation_thread.join(2.0)
             if simulation_thread.is_alive():
-                utils.send_pygame_update(
-                    utils.UPDATE_TYPE_MESSAGE,
-                    "Warning: Simulation thread did not terminate gracefully.")
-
+                print("Warning: Simulation thread did not terminate gracefully.")
+            else:
+                print("DEBUG: Simulation thread joined.")
     pygame.quit()
     print("Pygame GUI closed.")
-    # sys.exit() # Non necessario se questo è il thread principale che termina
 
 
+# --- Punto di Ingresso Principale ---
 if __name__ == "__main__":
     print("Application starting...")
-    db_manager.create_tables()  # Assicura che le tabelle DB esistano
-    print(f"Database tables ensured in {config.DATABASE_FILE}")
-
-    # Avvia la GUI principale
+    try:
+        db_manager.create_tables()
+        print(f"Database tables ensured in '{config.DATABASE_FILE}'")
+    except Exception as e_db_init:
+        print(f"FATAL ERROR: Could not ensure database tables: {e_db_init}")
+        sys.exit(1)  # pragma: no cover
     main_pygame_gui()
-
     print("Application finished.")
-    sys.exit()
+    sys.exit(0)

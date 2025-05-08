@@ -1,29 +1,25 @@
 # utils.py
-
 import queue
-# import pygame # Importa pygame qui se non lo fai già e se serve per get_init
+import threading  # Importa threading se usi simulation_running_event qui
 
 # --- Pygame Output Handling ---
 pygame_update_queue = queue.Queue()
-simulation_running_event = None  # Sarà impostato da gui.py
+# Evento per segnalare se la simulazione è attiva (impostato da gui.py)
+# Rimosso: simulation_running_event = None # Viene gestito direttamente in gui.py
 
 
 def send_pygame_update(update_type, data=None):
-    """Sends an update message to the Pygame queue."""
+    """Sends an update message to the Pygame queue if Pygame display is active."""
     try:
-        # Questa parte serve per evitare errori se Pygame non è inizializzato
-        # o se si esegue la logica di simulazione senza una GUI attiva (es. per test)
-        import pygame  # Importazione locale per ridurre dipendenze a livello di modulo
-        if pygame.display.get_init():  # Controlla se il modulo display di Pygame è inizializzato
+        import pygame
+        # Controlla se Pygame e il suo modulo display sono inizializzati
+        if pygame.get_init() and pygame.display.get_init():
             pygame_update_queue.put((update_type, data))
-        # else:
-            # print(f"Pygame not init. Update not sent: {update_type}") # Opzionale: Log se non inviato
-    except ImportError:  # pragma: no cover
-        # print(f"Pygame not imported. Update not sent: {update_type}") # Opzionale
+    except (ImportError, pygame.error):  # pragma: no cover
+        # Pygame non disponibile o non inizializzato, ignora l'invio
         pass
-    except Exception:  # pragma: no cover
-        # print(f"Error sending Pygame update ({update_type}): {e}") # Opzionale
-        pass
+    except Exception as e:  # pragma: no cover # Altre eccezioni impreviste
+        print(f"Error sending Pygame update ({update_type}): {e}")
 
 
 # Update types for Pygame queue
@@ -33,5 +29,5 @@ UPDATE_TYPE_RESULTS = "results"
 UPDATE_TYPE_FLAG = "flag"
 UPDATE_TYPE_COMPLETE = "complete"
 UPDATE_TYPE_ERROR = "error"
-UPDATE_TYPE_WARNING = "warning"  # Aggiunto per coerenza con gui.py
-UPDATE_TYPE_KEY_ELECTORS = "key_electors"  # Decommentato o aggiunto
+UPDATE_TYPE_WARNING = "warning"
+UPDATE_TYPE_KEY_ELECTORS = "key_electors"
