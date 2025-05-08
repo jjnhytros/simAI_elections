@@ -100,6 +100,10 @@ ELECTOR_TRAIT_COUNT = random.randint(1, 6)
 # Elector Trait Modifiers
 ELECTOR_SUSCEPTIBILITY_BASE = random.uniform(
     0.4, 0.6)  # Base susceptibility to influence
+INFLUENCE_TRAIT_MULTIPLIER_EASILY_INFLUENCED = random.uniform(
+    1.8, 2.5)  # Easily Influenced trait multiplier
+# Loyal trait multiplier (applied to influence *against* their party)
+INFLUENCE_TRAIT_MULTIPLIER_LOYAL = random.uniform(0.3, 0.6)
 
 # Strategic Voting Parameters
 STRATEGIC_VOTING_START_ROUND = random.randint(
@@ -124,12 +128,17 @@ UNDERDOG_EFFECT_FACTOR = random.uniform(
     0.1, 0.25)  # Strength of the underdog effect
 MAX_BIAS_LEANING_ADJUSTMENT = random.uniform(
     0.8, 1.8)  # Maximum leaning adjustment from biases
-CONFIRMATION_BIAS_FACTOR = random.uniform(
-    1.1, 1.4)  # Strength of confirmation bias
+# Strength of confirmation bias (amplifies congruent info, reduces incongruent)
+CONFIRMATION_BIAS_FACTOR = random.uniform(1.1, 1.4)
 # Reduction factor for impact of incongruent info
 MOTIVATED_REASONING_FACTOR = random.uniform(0.3, 0.6)
 
-# Elector Learning Parameters (NUOVO)
+# Media Literacy Parameters
+MEDIA_LITERACY_RANGE = (1, 5)  # Range del punteggio (1=Basso, 5=Alto)
+# How much literacy reduces impact/suscettibility
+MEDIA_LITERACY_EFFECT_FACTOR = random.uniform(0.1, 0.3)
+
+# Elector Learning Parameters (NUOVO - Spostato sotto AI Integration)
 # Learning rate for elector preference weights
 ELECTOR_LEARNING_RATE = random.uniform(0.01, 0.05)
 # How much campaign exposure influences learning
@@ -199,7 +208,7 @@ GOVERNOR_PAUSE_SECONDS = 0.3
 
 INFLUENCE_ELECTORS_PER_CANDIDATE = random.randint(
     max(10, NUM_GRAND_ELECTORS // 10), max(20, NUM_GRAND_ELECTORS // 4)
-)  # How many electors a college candidate can influence per round
+)  # How many electors a college candidate can target per round
 
 # Base chance of a campaign attempt being successful
 CAMPAIGN_INFLUENCE_CHANCE = random.uniform(0.6, 0.85)
@@ -238,6 +247,10 @@ COMPETITIVE_ADAPTATION_IMPACT = random.uniform(0.3, 0.6)
 # Number of top opponents considered for counter-messaging strategy
 COMPETITIVE_ADAPTATION_TOP_OPPONENTS = 2
 
+# Targeting Parameters (Used in simulate_campaigning for potential calculation)
+TARGETING_KEY_ELECTOR_BONUS_FACTOR = random.uniform(
+    1.5, 2.5)  # Bonus to potential for key electors
+
 
 # ==============================================================================
 # --- SOCIAL NETWORK ---
@@ -268,6 +281,7 @@ CURRENT_HOT_TOPIC = None
 # Scandal Event Parameters
 EVENT_SCANDAL_PROB_FACTOR_INTEGRITY_DIFF = random.uniform(
     0.015, 0.035)  # Probability factor based on max integrity difference
+EVENT_SCANDAL_IMPACT = random.uniform(1.0, 3.0)  # Base impact of a scandal
 
 # Ethics Debate Event Parameters
 EVENT_ETHICS_DEBATE_PROB_FACTOR_INTEGRITY_DIFF = random.uniform(

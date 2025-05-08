@@ -1,11 +1,60 @@
-# voting.py
 import random
 import math
 from collections import Counter
 import copy
 import networkx as nx
+import uuid  # Import uuid for db_manager interaction
+import json  # Import json for db_manager interaction
+# Imports da altri moduli del progetto (modificati da relativi a assoluti)
 import config
 import utils
+import db_manager  # Import db_manager
+
+
+# Funzione per identificare elettori chiave (Spostata qui da election.py)
+def identify_key_electors(elector_preferences_data,
+                          current_results,
+                          num_top_candidates_to_consider=3):
+    """Identifica elettori chiave (swing, influenzabili)."""
+    key_electors_summary = []
+    if not elector_preferences_data or not current_results:
+        return key_electors_summary
+    top_cand_names = [
+        item[0]
+        for item in current_results.most_common(num_top_candidates_to_consider)
+    ]
+
+    for e_id, data in elector_preferences_data.items():
+        traits = data.get('traits', [])
+        leanings = data.get('leanings', {})
+        is_key = False
+        reasons = []
+        if "Easily Influenced" in traits:
+            is_key = True
+            reasons.append("Easily Influenced")
+        if "Swing Voter" in traits:
+            is_key = True
+            reasons.append("Is a Swing Voter")
+        if leanings and len(top_cand_names) >= 2:
+            top_leans = sorted([{
+                'name': cn,
+                'leaning': leanings[cn]
+            } for cn in top_cand_names if cn in leanings],
+                key=lambda x: x['leaning'],
+                reverse=True)
+            if len(top_leans) >= 2:
+                diff = top_leans[0]['leaning'] - top_leans[1]['leaning']
+                if abs(diff) < config.ELECTOR_SWING_THRESHOLD:
+                    is_key = True
+                    reasons.append(
+                        f"Swing b/w {top_leans[0]['name']} ({top_leans[0]['leaning']:.1f}) & {top_leans[1]['name']} ({top_leans[1]['leaning']:.1f})"
+                    )
+        if is_key:
+            key_electors_summary.append({
+                "id": e_id,
+                "reasons": list(set(reasons))
+            })
+    return key_electors_summary
 
 
 # Funzioni per cittadini (rimangono semplici per ora)
@@ -429,14 +478,63 @@ def analyze_competition_and_adapt_strategy(candidate_info, all_candidates_info,
 def simulate_campaigning(candidates_info, electors,
                          elector_full_preferences_data, last_round_results):
     """Simulates campaigning considering Media Literacy and Confirmation Bias,
-       and using dynamically adapted themes."""
+       using dynamically adapted themes and strategic budget allocation."""
     utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
                              "\n--- Simulating Candidate Campaigning ---")
     if not candidates_info or not electors:
         return
 
-    total_attempts, succ_attempts = 0, 0
-    elector_map = {e['id']: e for e in electors}
+    total_campaign_attempts_overall = 0
+    successful_impacts_overall = 0
+    elector_map = {
+        e['id']: e
+        for e in electors
+    }  # Map elector IDs to their objects
+    elector_ids = list(elector_map.keys())  # List of all elector IDs
+
+    # Identify key electors for targeting consideration
+    # Need the full elector preferences data and last results
+    key_electors_summary = identify_key_electors(elector_full_preferences_data,
+                                                 last_round_results)
+    key_elector_ids = {ke['id']
+                       for ke in key_electors_summary
+                       }  # Set of key elector IDs
+
+    # Calculate elector potentials once for this round
+    # This potential score can influence both targeting selection and potentially budget allocation per elector
+    elector_potentials = {}
+    for e_obj in electors:
+        e_id = e_obj['id']
+        e_prefs = elector_full_preferences_data.get(e_id, {})
+        e_traits = e_obj.get('traits', [])
+
+        # Simplified elector potential/susceptibility for targeting:
+        elector_potential_score = config.ELECTOR_SUSCEPTIBILITY_BASE  # Base susceptibility
+        if "Easily Influenced" in e_traits:
+            elector_potential_score *= config.INFLUENCE_TRAIT_MULTIPLIER_EASILY_INFLUENCED
+        if "Loyal" in e_traits:  # Loyal electors might be less susceptible to opposing campaigns
+            # This needs candidate context to be truly effective
+            # For simplicity, let's just consider if they are loyal in general might affect their *overall* potential to be swayed by *any* campaign
+            # A loyal elector might be highly susceptible to *their own party's* campaign but resistant to others.
+            # The current potential is a general susceptibility score. Let's keep it that way for now.
+            pass  # Loyal trait effect is handled in the influence application based on party match
+
+        # Consider if they are a key elector (swing or easily influenced) - these are often high potential targets
+        if e_id in key_elector_ids:
+            # TARGETING_KEY_ELECTOR_BONUS_FACTOR is now defined in config.py
+            # Bonus for key electors
+            elector_potential_score *= config.TARGETING_KEY_ELECTOR_BONUS_FACTOR
+
+        elector_potentials[e_id] = max(0.1, min(
+            5.0, elector_potential_score))  # Clamp score
+
+    # Normalize potentials to get weights for budget allocation (higher potential elector gets a higher weight)
+    total_potential_sum = sum(
+        elector_potentials.values()) if elector_potentials else 1.0
+    elector_allocation_weights = {
+        e_id: pot / total_potential_sum
+        for e_id, pot in elector_potentials.items()
+    }
 
     for cand in candidates_info:
         cand_name = cand['name']
@@ -446,193 +544,295 @@ def simulate_campaigning(candidates_info, electors,
         themes = cand.get('current_campaign_themes',
                           [])  # Use the adapted themes
         budget = cand.get('campaign_budget', 0)
-        min_cost = config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[0]
+        min_cost_per_elector = config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[0]
 
-        # Targeting
-        target_potentials = []
-        for e_obj in electors:
-            e_id = e_obj['id']
-            e_prefs = elector_full_preferences_data.get(e_id, {})
-            e_leans = e_prefs.get('leanings', {})
-            e_ideals = {
-                k.replace('preference_', ''): v
-                for k, v in e_prefs.items() if k.startswith('preference_')
-            }
-            e_traits = e_obj.get('traits', [])
-            e_weights = e_prefs.get('weights', {})
-            lean_cand = e_leans.get(cand_name, 0)
-            potential = 0.0
-            sus_f = 1.0
+        # Determine how many electors this candidate can attempt to target this round
+        num_electors_to_target = config.INFLUENCE_ELECTORS_PER_CANDIDATE
+        if num_electors_to_target <= 0 or not elector_ids:
+            continue
+
+        # Select potential targets based on potential score (higher potential = higher chance of being targeted)
+        # Use the calculated elector_potentials for weighted sampling. Sample 'num_electors_to_target' unique electors.
+        # Using random.choices with weights and then taking a sample to ensure uniqueness and the correct number.
+        if total_potential_sum > 0:
+            # Create a list of electors to sample from, weighted by potential
+            weighted_elector_list = []
+            for e_id, potential in elector_potentials.items():
+                # Add elector ID to the list 'potential * 10' times (scaling factor)
+                # This creates a list where high-potential electors appear more frequently
+                # Need to handle potential = 0 case
+                num_add = max(1, int(
+                    potential * 10))  # Add at least once, scale by potential
+                weighted_elector_list.extend([e_id] * num_add)
+
+            # Sample unique elector IDs from the weighted list
+            # Ensure we don't try to sample more unique items than available
+            num_to_sample_unique = min(num_electors_to_target,
+                                       len(elector_ids))
+            if len(weighted_elector_list) >= num_to_sample_unique:
+                target_ids = random.sample(weighted_elector_list,
+                                           num_to_sample_unique)
+                # Ensure uniqueness after sampling - convert to set and back to list
+                target_ids = list(set(target_ids))
+                # If we still don't have enough after making unique (unlikely if list was large enough), resample randomly
+                while len(target_ids) < num_to_sample_unique and len(
+                        elector_ids) > len(target_ids):
+                    needed_more = num_to_sample_unique - len(target_ids)
+                    remaining_elector_ids = [
+                        eid for eid in elector_ids if eid not in target_ids
+                    ]
+                    target_ids.extend(
+                        random.sample(
+                            remaining_elector_ids,
+                            min(needed_more, len(remaining_elector_ids))))
+                    target_ids = list(
+                        set(target_ids))  # Ensure uniqueness again
+            else:  # Fallback to random sampling if no potential sum
+                target_ids = random.sample(
+                    elector_ids, min(num_electors_to_target, len(elector_ids)))
+
+        else:  # Fallback to random sampling if no potential sum
+            target_ids = random.sample(
+                elector_ids, min(num_electors_to_target, len(elector_ids)))
+
+        succ_cand = 0  # Successful influences for this candidate in this round
+        influenced_cnt = 0  # Number of electors targeted by this candidate in this round
+
+        # Allocate budget strategically among selected targets and simulate influence attempts
+        total_budget_spent_this_round = 0
+        for e_id in target_ids:
+            if budget <= min_cost_per_elector:
+                utils.send_pygame_update(
+                    utils.UPDATE_TYPE_MESSAGE,
+                    f"  {cand_name} budget low ({budget:.2f}). Campaign ended early."
+                )
+                break  # Stop targeting if budget is too low
+
+            influenced_cnt += 1
+            # Count total attempts across all candidates and electors
+            total_campaign_attempts_overall += 1
+
+            e_info = elector_map.get(e_id)  # Get elector object
+            e_prefs = elector_full_preferences_data.get(
+                e_id
+            )  # Get elector preferences (where leanings and weights are)
+            if not e_info or not e_prefs:
+                continue  # Skip if elector info or preferences are missing
+            e_traits = e_info.get('traits', [])  # Get elector traits
+
+            # Determine budget to allocate to THIS specific elector attempt
+            # Allocate more budget to higher potential targets, within the allocation range
+            elector_weight = elector_allocation_weights.get(
+                e_id,
+                0)  # Use the pre-calculated allocation weight for this elector
+
+            # Scale the allocation within the per-attempt range based on elector's allocation weight
+            # This makes high-weight electors receive a larger portion of the budget allocated per attempt
+            alloc_range_size = config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[
+                1] - config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[0]
+            alloc = config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[
+                0] + elector_weight * alloc_range_size
+            alloc = min(
+                budget, alloc
+            )  # Ensure allocated amount does not exceed remaining budget
+            alloc = max(
+                min_cost_per_elector, alloc
+            ) if budget >= min_cost_per_elector else 0  # Ensure minimum cost if enough budget, else 0
+
+            # If budget > 0 but alloc is 0 (e.g., due to min_cost_per_elector), allocate min cost if possible
+            if alloc == 0 and budget > 0:
+                alloc = min(budget, min_cost_per_elector
+                            ) if budget >= min_cost_per_elector else 0
+
+            # Deduct allocated budget
+            budget -= alloc
+            total_budget_spent_this_round += alloc
+
+            # Susceptibility (with Media Literacy) - uses the same logic as before
+            # Base susceptibility adjusted by traits
+            base_sus = config.ELECTOR_SUSCEPTIBILITY_BASE + random.uniform(
+                -0.2, 0.2)
             if "Easily Influenced" in e_traits:
-                sus_f *= config.INFLUENCE_TRAIT_MULTIPLIER_EASILY_INFLUENCED
-            if "Loyal" in e_traits and lean_cand > config.MAX_ELECTOR_LEANING_BASE * 0.6:
-                sus_f *= config.INFLUENCE_TRAIT_MULTIPLIER_LOYAL
-            potential += sus_f * getattr(config, "TARGETING_TRAIT_BASE_SCORE",
-                                         1.0)
-            opt_range = (config.MAX_ELECTOR_LEANING_BASE * 0.25,
-                         config.MAX_ELECTOR_LEANING_BASE * 0.75)
-            if opt_range[0] <= lean_cand <= opt_range[1]:
-                potential += getattr(config, "TARGETING_OPTIMAL_LEANING_BONUS",
-                                     2.0)
-            w_dist, max_w_dist = 0.0, 0.0
-            if e_ideals and e_weights and cand_attrs:
-                for attr, w in e_weights.items():
-                    if attr in cand_attrs and attr in e_ideals:
-                        w_dist += abs(cand_attrs[attr] - e_ideals[attr]) * w
-                    max_w_dist += (config.ATTRIBUTE_RANGE[1] -
-                                   config.ATTRIBUTE_RANGE[0]) * w
-            align_f = max(0, 1.0 -
-                          (w_dist / max_w_dist)) if max_w_dist > 0 else 0
-            potential += align_f * getattr(
-                config, "TARGETING_ALIGNMENT_BONUS_FACTOR", 3.0)
-            target_potentials.append((e_id, potential))
+                base_sus *= config.INFLUENCE_TRAIT_MULTIPLIER_EASILY_INFLUENCED
 
-        target_potentials.sort(key=lambda i: i[1], reverse=True)
-        targets = target_potentials[:config.INFLUENCE_ELECTORS_PER_CANDIDATE]
-        succ_cand, influenced_cnt = 0, 0
-
-        # Execution
-        for e_id, potential in targets:
-            if budget >= min_cost:
-                max_alloc = min(
-                    budget, config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[1])
-                if min_cost > max_alloc:
-                    break
-                # Budget Allocation
-                norm_pot = min(
-                    potential / config.MAX_TARGETING_POTENTIAL_SCORE,
-                    1.0) if config.MAX_TARGETING_POTENTIAL_SCORE > 0 else 0.5
-                alloc_perc = random.uniform(0.6, 1.0) if norm_pot > 0.75 else (
-                    random.uniform(0.3, 0.7)
-                    if norm_pot > 0.4 else random.uniform(0.1, 0.4))
-                alloc = max(
-                    min_cost,
-                    min(int(min_cost + (max_alloc - min_cost) * alloc_perc),
-                        max_alloc))
-                budget -= alloc
-                influenced_cnt += 1
-                total_attempts += 1
-
-                e_info = elector_map.get(e_id)
-                e_prefs = elector_full_preferences_data.get(e_id)
-                if not e_info or not e_prefs:
-                    continue
-                e_traits = e_info.get('traits', [])
-
-                # Susceptibility (with Media Literacy)
-                base_sus = config.ELECTOR_SUSCEPTIBILITY_BASE + random.uniform(
-                    -0.2, 0.2)
-                if "Easily Influenced" in e_traits:
-                    base_sus *= config.INFLUENCE_TRAIT_MULTIPLIER_EASILY_INFLUENCED
-                if "Loyal" in e_traits:
+            # Loyal trait effect: harder to sway with campaigns *against* their party
+            if "Loyal" in e_traits:
+                cand_party = cand.get('party_id', 'Unknown')
+                elector_party = e_prefs.get('party_preference', 'Independent')
+                # If candidate and elector have different parties (and neither is independent)
+                if cand_party != 'Independent' and elector_party != 'Independent' and cand_party != elector_party:
+                    # Apply loyal multiplier (less susceptible)
                     base_sus *= config.INFLUENCE_TRAIT_MULTIPLIER_LOYAL
-                lit_score = e_prefs.get('media_literacy',
-                                        config.MEDIA_LITERACY_RANGE[0])
-                min_l, max_l = config.MEDIA_LITERACY_RANGE
-                norm_lit = (lit_score - min_l) / (max_l - min_l) if (
-                    max_l - min_l) > 0 else 0
-                lit_reduc = norm_lit * config.MEDIA_LITERACY_EFFECT_FACTOR
-                final_sus = max(0.05, min(0.95, base_sus * (1.0 - lit_reduc)))
 
-                # Success Chance
-                base_chance = (cand_med /
-                               config.ATTRIBUTE_RANGE[1]) * final_sus
-                alloc_bonus = (
-                    alloc - min_cost
-                ) * config.CAMPAIGN_ALLOCATION_SUCCESS_CHANCE_FACTOR
-                final_chance = max(0.05, min(1.0, base_chance + alloc_bonus))
+            # Media Literacy effect: reduces susceptibility
+            lit_score = e_prefs.get('media_literacy',
+                                    config.MEDIA_LITERACY_RANGE[0])
+            min_l, max_l = config.MEDIA_LITERACY_RANGE
+            norm_lit = (lit_score - min_l) / (max_l - min_l) if (
+                max_l - min_l) > 0 else 0
+            lit_reduc = norm_lit * config.MEDIA_LITERACY_EFFECT_FACTOR
+            final_sus = max(0.05, min(
+                0.95, base_sus * (1.0 - lit_reduc)))  # Final susceptibility
 
-                # If successful
-                if random.random() < final_chance:
-                    succ_cand += 1
-                    # Influence Amount
-                    base_inf = config.INFLUENCE_STRENGTH_FACTOR * config.MAX_ELECTOR_LEANING_BASE * random.uniform(
-                        0.8, 1.2)
-                    alloc_inf_bonus = (
-                        alloc -
-                        min_cost) * config.CAMPAIGN_ALLOCATION_INFLUENCE_FACTOR
-                    total_inf = min(base_inf + alloc_inf_bonus,
-                                    config.MAX_CAMPAIGN_INFLUENCE_PER_ATTEMPT)
+            # Success Chance - influenced by candidate's ability, elector's susceptibility, and allocated budget
+            base_chance = (cand_med / config.ATTRIBUTE_RANGE[1]) * final_sus
+            # Allocation bonus for success chance: spending more increases chance
+            alloc_success_bonus = (
+                alloc / config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[1]
+            ) * config.CAMPAIGN_ALLOCATION_SUCCESS_CHANCE_FACTOR  # Scale bonus by proportion of max allocation
+            final_chance = max(0.05, min(
+                1.0, base_chance + alloc_success_bonus))  # Cap success chance
 
-                    # Apply Theme Bonus (now more likely for chosen themes)
-                    theme_bonus = 0.0
-                    e_weights = e_prefs.get('weights', {})
-                    if themes and e_weights:
-                        for t in themes:
-                            w = e_weights.get(t, 0)
-                            # Higher chance of bonus if theme is in the adapted themes
-                            if w > config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[
-                                    0] and t in themes:
-                                max_w = config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[
-                                    1]
-                                norm_w = w / max_w if max_w > 0 else 0.5
+            # If campaign attempt is successful
+            if random.random() < final_chance:
+                succ_cand += 1
+                # Count total successful impacts across all candidates and electors
+                successful_impacts_overall += 1
+
+                # Influence Amount - influenced by base strength, allocated budget, and themes
+                base_inf = config.INFLUENCE_STRENGTH_FACTOR * config.MAX_ELECTOR_LEANING_BASE * random.uniform(
+                    0.8, 1.2)
+                # Allocation bonus for influence strength: spending more increases influence
+                alloc_inf_bonus = (
+                    alloc / config.CAMPAIGN_ALLOCATION_PER_ATTEMPT_RANGE[1]
+                ) * config.CAMPAIGN_ALLOCATION_INFLUENCE_FACTOR  # Scale bonus by proportion of max allocation
+                total_inf = min(base_inf + alloc_inf_bonus,
+                                config.MAX_CAMPAIGN_INFLUENCE_PER_ATTEMPT
+                                )  # Cap total influence
+
+                # Apply Theme Bonus (more likely for chosen themes)
+                theme_bonus = 0.0
+                e_weights = e_prefs.get('weights',
+                                        {})  # Elector's attribute weights
+                if themes and e_weights:
+                    for t in themes:
+                        w = e_weights.get(t, 0)
+                        # If elector cares about the theme (weight > min)
+                        if w > config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[0]:
+                            max_w = config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[1]
+                            norm_w = w / max_w if max_w > 0 else 0.5  # Normalize weight
+                            # Apply bonus, potentially boosted if it's an adapted theme
+                            if t in themes:  # Check if this theme is one of the candidate's CURRENT campaign themes
                                 theme_bonus += config.CAMPAIGN_THEME_BONUS_PER_ATTRIBUTE * norm_w * random.uniform(
                                     1.0,
                                     1.5)  # Slightly boosted if adapted theme
-                            elif w > config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[
-                                    0]:  # Still a chance for non-adapted relevant themes
-                                max_w = config.ELECTOR_ATTRIBUTE_WEIGHT_RANGE[
-                                    1]
-                                norm_w = w / max_w if max_w > 0 else 0.5
+                            # Still apply some bonus if elector cares about a theme, even if it's not the candidate's adapted theme (less likely)
+                            else:
                                 theme_bonus += config.CAMPAIGN_THEME_BONUS_PER_ATTRIBUTE * norm_w * random.uniform(
-                                    0.5, 1.0)  # Reduced if not adapted theme
+                                    0.5, 1.0
+                                )  # Reduced if not explicitly in adapted themes
 
-                    total_inf += theme_bonus
-                    # Confirmation Bias
-                    conf_mod = 1.0
-                    if "Confirmation Prone" in e_traits:
-                        curr_l = e_prefs.get('leanings', {}).get(cand_name, 0)
-                        mid = config.MAX_ELECTOR_LEANING_BASE / 2.0
-                        bias_f = config.CONFIRMATION_BIAS_FACTOR
-                        if curr_l > mid:
-                            conf_mod = bias_f
-                        elif curr_l < mid * 0.8:
-                            conf_mod = 1.0 / bias_f
-                    adj_inf = total_inf * conf_mod
-                    # Apply
-                    if cand_name in e_prefs['leanings']:
-                        e_prefs['leanings'][cand_name] = max(
-                            0.1, e_prefs['leanings'][cand_name] + adj_inf)
+                total_inf += theme_bonus  # Add theme bonus to total influence
 
-                    # --- Elector Learning: Campaign Exposure (NUOVO) ---
-                    # Elettore apprende/adatta i suoi pesi di preferenza basandosi sull'esposizione alla campagna riuscita
-                    # Una campagna riuscita potrebbe rafforzare (o casualmente indebolire) l'importanza dell'identità vs policy
-                    learning_adj = config.ELECTOR_LEARNING_RATE * config.CAMPAIGN_EXPOSURE_LEARNING_EFFECT * random.uniform(
-                        -0.5, 0.5)  # Piccolo aggiustamento casuale
-                    e_prefs['identity_weight'] = max(
-                        0.1, min(0.9,
-                                 e_prefs['identity_weight'] + learning_adj))
-                    e_prefs['policy_weight'] = 1.0 - e_prefs[
-                        'identity_weight']  # Assicura che la somma sia 1.0
+                # Confirmation Bias - Influences how the elector reacts to the message
+                # Adjusts influence based on whether the message aligns with the elector's existing leanings
+                conf_mod = 1.0
+                if "Confirmation Prone" in e_traits:
+                    curr_l = e_prefs.get('leanings', {}).get(
+                        cand_name,
+                        0)  # Elector's current leaning towards this candidate
+                    mid = config.MAX_ELECTOR_LEANING_BASE / 2.0  # Midpoint of leaning scale
+                    bias_f = config.CONFIRMATION_BIAS_FACTOR  # Strength of confirmation bias
 
-            else:
-                utils.send_pygame_update(
-                    utils.UPDATE_TYPE_MESSAGE,
-                    f"  {cand_name} budget low. Campaign ended.")
-                break
+                    # If elector already leans towards the candidate, influence is amplified
+                    if curr_l > mid:
+                        conf_mod = bias_f
+                    # If elector leans strongly against the candidate, influence is reduced
+                    elif curr_l < mid * 0.8:  # Check if leaning is significantly below midpoint
+                        conf_mod = 1.0 / bias_f  # Reduce influence
 
-        # Update budget & Log
-        for c in candidates_info:
-            if c['name'] == cand_name:
-                c['campaign_budget'] = budget
-                break
-        themes_str = ", ".join([t.replace('_', ' ').title()
-                                for t in themes]) if themes else "N/A"
-        utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            f"  Campaign {cand_name} (Themes: {themes_str}): {influenced_cnt} attempts ({succ_cand} succ.). Budget left: {budget:.2f}"
-        )
-        succ_attempts += succ_cand
+                adj_inf = total_inf * conf_mod  # Apply confirmation bias modifier
 
-    # Summary Log
-    if total_attempts > 0:
-        utils.send_pygame_update(
-            utils.UPDATE_TYPE_MESSAGE,
-            f"  Campaign Summary: Attempts={total_attempts}, Successes={succ_attempts}"
-        )
-    else:
-        utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
-                                 "  No campaign attempts.")
+                # Apply influence to elector's leaning towards this candidate
+                if cand_name in e_prefs['leanings']:
+                    e_prefs['leanings'][cand_name] = max(
+                        0.1, e_prefs['leanings'][cand_name] +
+                        adj_inf)  # Ensure leaning stays above 0.1
+
+                # --- Elector Learning: Campaign Exposure ---
+                # Elector learns/adopts the importance of identity vs policy based on successful campaign exposure
+                # Successful exposure might strengthen (or randomly weaken) the importance they give to identity vs policy
+                learning_adj = config.ELECTOR_LEARNING_RATE * config.CAMPAIGN_EXPOSURE_LEARNING_EFFECT * random.uniform(
+                    -0.5, 0.5
+                )  # Small random adjustment proportional to learning rate and effect
+
+                # Apply learning adjustment to identity_weight (and update policy_weight)
+                e_prefs['identity_weight'] = max(
+                    0.1, min(0.9, e_prefs['identity_weight'] + learning_adj
+                             ))  # Clamp identity weight between 0.1 and 0.9
+                e_prefs['policy_weight'] = 1.0 - e_prefs[
+                    'identity_weight']  # Ensure policy weight is complementary
+
+            # else: campaign attempt was not successful, budget is still spent
+
+        # Update candidate's remaining budget after spending on this elector attempt
+        # This is done within the loop per elector attempt to accurately reflect spending
+        # The total budget update for the candidate object happens after the loop over targets.
+        pass  # Budget deduction is already handled above inside the loop
+
+    # Update candidate's remaining budget after spending in this round on all targeted electors
+    for c in candidates_info:
+        # Find the candidate in the original list (candidates_info) by name
+        # This is needed because 'cand' in the loop is a copy, but we need to update
+        # the budget in the original list that's passed back and forth.
+        # This is inefficient; it would be better to modify the candidate object directly
+        # by passing it or its reference to the loop, or operating on a mutable list.
+        # Given the current structure, updating by name in the list is necessary.
+        # However, 'candidates_info' IS the list being iterated and modified.
+        # The 'budget' variable inside the loop holds the updated budget for the current cand.
+        # We just need to save this updated budget back to the DB.
+        if c['name'] == cand_name:
+            # Update the budget in the original list
+            c['campaign_budget'] = budget
+
+            # Save updated budget and other relevant candidate info to DB
+            db_manager.save_candidate({
+                'uuid':
+                c.get('uuid', str(uuid.uuid4())),  # Ensure UUID is present
+                'name':
+                c['name'],
+                'current_budget':
+                budget,  # Save the updated budget to DB
+                # Include other required fields to avoid overwriting with defaults if not fetched
+                'gender':
+                c.get('gender', 'Unknown'),
+                'age':
+                c.get('age', 0),
+                'party_id':
+                c.get('party_id', 'Unknown'),
+                'initial_budget':
+                c.get('initial_budget', config.INITIAL_CAMPAIGN_BUDGET
+                      ),  # Need initial budget in candidate obj or fetch
+                'attributes':
+                c.get('attributes', {}),
+                'traits':
+                c.get('traits', []),
+                'stats':
+                c.get('stats', {})
+            })
+            break  # Found the candidate, exit inner loop
+
+    # Log campaign summary for the candidate in this round
+    themes_str = ", ".join([t.replace('_', ' ').title()
+                            for t in themes]) if themes else "N/A"
+    utils.send_pygame_update(
+        utils.UPDATE_TYPE_MESSAGE,
+        f"  Campaign {cand_name} (Themes: {themes_str}): Targeted {influenced_cnt} electors ({succ_cand} succ.). Budget left: {budget:.2f}"
+    )
+
+    # Summary Log (Optional, if needed to sum up across all campaigning candidates)
+    # This summary might not be accurate if not all candidates campaigned.
+    # The per-candidate logs above are more informative.
+    # If needed, sum up attempts and successes across all campaigning candidates here.
+    # For now, let's keep the per-candidate log as primary.
+    # if total_campaign_attempts_overall > 0:
+    #     utils.send_pygame_update(
+    #         utils.UPDATE_TYPE_MESSAGE,
+    #         f"  Overall Campaign Summary (This Round): Attempts={total_campaign_attempts_overall}, Successes={successful_impacts_overall}"
+    #     )
+    # else:
+    #     utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
+    #                              "  No campaign attempts this round.")
 
 
 def simulate_social_influence(network_graph, current_preferences):
@@ -646,68 +846,90 @@ def simulate_social_influence(network_graph, current_preferences):
 
     utils.send_pygame_update(utils.UPDATE_TYPE_MESSAGE,
                              "\n--- Simulating Social Network Influence ---")
+    # Get all unique candidate names that electors have leanings towards
     all_cands = set().union(*(d.get('leanings', {}).keys()
                               for d in current_preferences.values()))
     if not all_cands:
         return current_preferences
 
-    next_prefs = copy.deepcopy(current_preferences)
+    next_prefs = copy.deepcopy(
+        current_preferences
+    )  # Create a deep copy to store next round preferences
+    # Iterate for the specified number of influence iterations
     for _ in range(iterations):
-        curr_iter_prefs = copy.deepcopy(next_prefs)
+        curr_iter_prefs = copy.deepcopy(
+            next_prefs
+        )  # Work on a copy of the current iteration's preferences
+        # Iterate through each elector
         for e_id, e_data in curr_iter_prefs.items():
             if e_id not in network_graph:
-                continue
-            neighbors = list(network_graph.neighbors(e_id))
-            n_count = len(neighbors)
-            e_leans = e_data.get('leanings', {})
+                continue  # Skip if elector is not in the network graph
+
+            neighbors = list(
+                network_graph.neighbors(e_id))  # Get list of neighbors
+            n_count = len(neighbors)  # Number of neighbors
+            e_leans = e_data.get('leanings', {})  # Current elector's leanings
+
             if n_count > 0:
+                # Calculate the average leaning of neighbors for each candidate
                 avg_neigh_leans = {c: 0.0 for c in all_cands}
                 neigh_counted = {c: 0 for c in all_cands}
                 for n_id in neighbors:
-                    n_leans = curr_iter_prefs.get(n_id, {}).get('leanings', {})
+                    n_leans = curr_iter_prefs.get(n_id, {}).get(
+                        'leanings', {})  # Neighbor's leanings
                     for c in all_cands:
                         if c in n_leans:
                             avg_neigh_leans[c] += n_leans[c]
                             neigh_counted[c] += 1
+                # Calculate the average leaning for each candidate, using elector's own leaning as the average
                 for c in all_cands:
                     if neigh_counted[c] > 0:
                         avg_neigh_leans[c] /= neigh_counted[c]
                     else:
+                        # If no neighbors have a leaning for this candidate, use the elector's own leaning as the average
                         avg_neigh_leans[c] = e_leans.get(c, 0)
 
-                target_leans = next_prefs[e_id].get('leanings', {})
-                original_identity_weight = e_data.get(
-                    'identity_weight',
-                    0.5)  # Get original weight for learning calculation
+                # Update the elector's leanings based on their current leaning and the average neighbor leaning
+                target_leans = next_prefs[e_id].get(
+                    'leanings',
+                    {})  # Get the leanings to be updated in the next state
 
                 for c in all_cands:
-                    curr_l = e_leans.get(c, 0)
-                    avg_n = avg_neigh_leans[c]
-                    # Check if influence happened
-                    if abs(avg_n - curr_l
-                           ) > 0.01:  # Simple threshold to consider influence
-                        # Apply influence on leaning
-                        target_leans[c] = max(0.1, (1 - alpha) * curr_l +
-                                              alpha * avg_n)
+                    curr_l = e_leans.get(c, 0)  # Current leaning
+                    avg_n = avg_neigh_leans[c]  # Average neighbor leaning
 
-                        # --- Elector Learning: Social Influence Exposure (NUOVO) ---
-                        # Elettore apprende/adatta i suoi pesi di preferenza basandosi sull'esposizione all'influenza sociale
-                        # L'esposizione a opinioni simili (o diverse) potrebbe rafforzare (o casualmente indebolire) l'importanza dell'identità vs policy
-                        # Aggiustamento basato sulla magnitudo dell'influenza ricevuta e un fattore casuale
-                        influence_magnitude = abs(avg_n - curr_l)
+                    # Apply influence on leaning using the alpha factor (Deffuant-Weisbuch like update)
+                    # This updates the leaning in the next_prefs for the *next* iteration
+                    next_prefs[e_id]['leanings'][c] = max(
+                        0.1, (1 - alpha) * curr_l +
+                        alpha * avg_n)  # Ensure leaning stays above 0.1
+
+                    # --- Elector Learning: Social Influence Exposure ---
+                    # Elector learns/adopts the importance of identity vs policy based on exposure to social influence
+                    # Exposure to influence (especially strong influence) might make them more or less identity-focused.
+                    influence_magnitude = abs(
+                        avg_n - curr_l)  # Magnitude of influence received
+
+                    # Trigger learning based on influence magnitude and learning effect threshold
+                    if influence_magnitude > config.SOCIAL_INFLUENCE_LEARNING_EFFECT * 2:  # If influence is significant
+
                         learning_adj = config.ELECTOR_LEARNING_RATE * config.SOCIAL_INFLUENCE_LEARNING_EFFECT * influence_magnitude * random.uniform(
                             -1.0, 1.0
-                        )  # Adjustment based on influence and randomness
+                        )  # Adjustment proportional to influence magnitude and randomness
 
-                        # Apply learning adjustment to identity_weight
+                        # Apply learning adjustment to identity_weight (and update policy_weight)
                         next_prefs[e_id]['identity_weight'] = max(
                             0.1,
                             min(
-                                0.9, next_prefs[e_id]['identity_weight'] +
-                                learning_adj))
-                        next_prefs[e_id]['policy_weight'] = 1.0 - next_prefs[
-                            e_id]['identity_weight']  # Ensure sum is 1.0
+                                0.9,
+                                next_prefs[e_id].get('identity_weight', 0.5) +
+                                learning_adj)
+                        )  # Get identity weight from the next_prefs (updated in previous influence step if iterations > 1)
+                        next_prefs[e_id][
+                            'policy_weight'] = 1.0 - next_prefs[e_id][
+                                'identity_weight']  # Ensure policy weight is complementary
 
+    # The final 'next_prefs' after all iterations is returned, containing updated leanings and weights.
     utils.send_pygame_update(
         utils.UPDATE_TYPE_MESSAGE,
         f"Social influence computed ({iterations} iter, strength={alpha:.2f})."
@@ -720,19 +942,27 @@ def verify_election(current_results, num_electors,
     """Verifies if a candidate has been elected."""
     if not current_results:
         votes_needed = math.ceil(num_electors * required_majority_percentage)
-        return None, votes_needed, votes_needed
+        return None, votes_needed, votes_needed  # No results, no winner
     votes_needed = math.ceil(num_electors * required_majority_percentage)
-    sorted_res = current_results.most_common()
+    sorted_res = current_results.most_common()  # Get results sorted by votes
     if sorted_res:
-        top_cand, top_votes = sorted_res[0]
-    if top_votes >= votes_needed:
-        if len(sorted_res) > 1 and sorted_res[1][1] == top_votes:
-            return None, votes_needed, votes_needed
-        else:
-            return top_cand, votes_needed, votes_needed
+        top_cand, top_votes = sorted_res[
+            0]  # Get the top candidate and their votes
+
+        # Check if top candidate has enough votes
+        if top_votes >= votes_needed:
+            # Check for ties with the top candidate
+            if len(sorted_res) > 1 and sorted_res[1][1] == top_votes:
+                return None, votes_needed, votes_needed  # It's a tie, no single winner
+            else:
+                return top_cand, votes_needed, votes_needed  # Top candidate wins
+
+    # If no one reached the majority or there was a tie at the top
     return None, votes_needed, votes_needed
 
 
 def count_votes(votes):
     """Counts votes for each candidate."""
-    return Counter(votes)
+    return Counter(
+        votes
+    )  # Use Counter to count occurrences of each vote (candidate name)

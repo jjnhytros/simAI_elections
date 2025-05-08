@@ -1,4 +1,3 @@
-# TODO.md
 # TODO - simAI_elections
 
 (Legenda: [x] = Completato, [P] = Parzialmente Completato, [ ] = Da Fare, [N/A] = Non Applicabile/Riconsiderato)
@@ -18,12 +17,12 @@
 2.  **Miglioramenti alla GUI**
     * [x] Visualizzazione risultati con barre.
     * [x] Interazioni utente base (Start, Next Round, Quit).
-    * [P] Visualizzazione Info Candidati:
+    * [x] Visualizzazione Info Candidati:
         * [x] Rimossi sprite.
         * [x] Nomi colorati per genere.
-        * [P] Visualizzazione attributi, età e partito tramite tooltip.
+        * [x] Visualizzazione attributi, età e partito tramite tooltip.
     * [x] Riepilogo finale base.
-    * [ ] Visualizzazione Avanzata Preferenze Elettori (Mappa/distribuzione leanings - richiede GUI dedicata).
+    * [P] Visualizzazione Avanzata Preferenze Elettori (Discussione concettuale e requisiti per GUI dedicata).
     * [P] Visualizzazione Elettori Chiave:
         * [P] Backend identifica elettori swing/influenzabili (loggati).
         * [ ] GUI deve visualizzare queste informazioni.
@@ -74,7 +73,7 @@
     * [P] Ogni candidato generato avrà un UUID univoco.
     * [P] Memorizzare tratti e valori degli attributi base per ogni candidato.
     * [P] Memorizzare il budget iniziale della campagna.
-    * [ ] Se viene generato un candidato con un nome nel db, utilizzare quello già presente nel db (Caricamento base implementato in generazione).
+    * [P] Se viene generato un candidato con un nome nel db, utilizzare quello già presente nel db (Caricamento base implementato in generazione).
     * [ ] Memorizzare e aggiornare il budget rimanente della campagna.
     * [ ] Memorizzare statistiche aggregate per ogni candidato (es. vittorie, sconfitte, voti ricevuti).
     * [ ] Aggiornare i dati del candidato nel DB al termine di ogni elezione/round rilevante.
