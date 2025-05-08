@@ -236,6 +236,11 @@ MAX_CAMPAIGN_INFLUENCE_PER_ATTEMPT = random.uniform(2.0, 4.0)
 # For normalizing the targeting potential calculation
 MAX_TARGETING_POTENTIAL_SCORE = 25.0
 
+# Esponente per i rendimenti decrescenti sulla spesa per tentativo di influenza
+# Un valore < 1.0 causa rendimenti decrescenti (es. 0.7 significa che raddoppiare la spesa non raddoppia il bonus)
+# Un valore = 1.0 sarebbe lineare (nessun rendimento decrescente)
+DIMINISHING_RETURNS_EXPONENT_PER_ATTEMPT = random.uniform(0.6, 0.85)  # Es. 0.7
+
 # ==============================================================================
 # --- COMPETITIVE ADAPTATION (CAMPAIGN AI) ---
 # ==============================================================================
